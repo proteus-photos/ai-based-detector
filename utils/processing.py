@@ -282,7 +282,6 @@ def make_aug(opt):
     else:
         return None
 
-
 def make_normalize(norm_type):
     transforms_list = list() # this type of initialization is done to make the code more readable
 

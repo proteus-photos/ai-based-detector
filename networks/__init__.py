@@ -1,9 +1,12 @@
 # ------------------------------------------------------------------------------
 # Reference: https://github.com/grip-unina/ClipBased-SyntheticImageDetection/blob/main/networks/__init__.py
 # ------------------------------------------------------------------------------
-
+from .ssp import ssp
 def create_architecture(name_arch, pretrained=False, num_classes=1):
-    if name_arch == "res50nodown":
+    if name_arch == 'ssp':
+        model = ssp()
+
+    elif name_arch == "res50nodown":
         from .resnet_mod import resnet50
 
         if pretrained:
@@ -52,6 +55,7 @@ def load_weights(model, model_path):
     elif 'conv1.weight' in dat:
         model.load_state_dict(dat)
     else:
-        print(list(dat.keys()))
-        assert False
+        model.load_state_dict(dat)
+        # print(list(dat.keys()))
+        # assert False
     return model

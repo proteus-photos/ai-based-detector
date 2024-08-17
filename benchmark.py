@@ -12,9 +12,10 @@ import sys
 import yaml
 from PIL import Image
 
-from torchvision.transforms  import CenterCrop, Resize, Compose, InterpolationMode
+from torchvision.transforms  import CenterCrop, Resize, Compose, InterpolationMode, Lambda
 from utils.processing import make_normalize, prepare_data
 from utils.fusion import apply_fusion
+from utils.patch import patch_img
 from networks import create_architecture, load_weights
 
 
@@ -48,6 +49,9 @@ def run_tests(data_dir,weights_dir, models_list, device, batch_size=1):
             transform.append(Resize(224, interpolation=InterpolationMode.BICUBIC))
             transform.append(CenterCrop((224, 224)))
             transform_key = 'Clip224_%s' % norm_type
+        elif patch_size == 'ssp16':
+            transform.append(Lambda(lambda img: patch_img(img, 16, 256)))
+            transform_key = 'ssp16_%s' % norm_type
         elif isinstance(patch_size, tuple) or isinstance(patch_size, list):
             print('input resize:', patch_size, flush=True)
             transform.append(Resize(*patch_size))
@@ -132,6 +136,8 @@ if __name__=="__main__":
         args['models'] = args['models'].split(',')    
     
     table = run_tests(args['data_dir'], args['weights_dir'], args['models'], args['device'])
+    if args['fusion']=='None':
+        args['fusion']=None
     if args['fusion'] is not None:
         table['fusion'] = apply_fusion(table[args['models']].values, args['fusion'], axis=-1)
     
