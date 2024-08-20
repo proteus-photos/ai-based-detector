@@ -1,0 +1,5 @@
+arch: efficientnet-b4
+model_name: laanet_bi
+norm_type: xception
+patch_size: laanet
+weights_file: PoseEfficientNet_EFN_hm100_EFPN_NoBasedCLS_Focal_C3_256Cstency100_32BI_SAM(Adam)_ADV_Erasing1_OutSigmoid_model_best.pth

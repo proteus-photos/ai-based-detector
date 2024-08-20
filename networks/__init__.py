@@ -5,7 +5,31 @@ from .ssp import ssp
 def create_architecture(name_arch, pretrained=False, num_classes=1):
     if name_arch == 'ssp':
         model = ssp()
-
+    elif name_arch.startswith('efficientnet-b4'):
+        from .pose_efficientNet import PoseEfficientNet
+        arg = {
+        'model_name': 'efficientnet-b4',
+        'num_layers': 'B4',
+        'include_top': False,
+        'include_hm_decoder': True,
+        'head_conv': 64,
+        'use_c2': False,
+        'use_c3': True,
+        'use_c4': True,
+        'use_c51': True,
+        'efpn': True,
+        'tfpn': False,
+        'se_layer': False,
+        'heads': {
+            'hm': 1,
+            'cls': 1,
+            'cstency': 256
+        },
+        'INIT_WEIGHTS': {
+            'pretrained': True,
+            'advprop': True
+        }}
+        model = PoseEfficientNet(**arg)
     elif name_arch == "res50nodown":
         from .resnet_mod import resnet50
 

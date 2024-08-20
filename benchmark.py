@@ -11,6 +11,7 @@ import glob
 import sys
 import yaml
 from PIL import Image
+import random
 
 from torchvision.transforms  import CenterCrop, Resize, Compose, InterpolationMode, Lambda
 from utils.processing import make_normalize, prepare_data
@@ -37,7 +38,9 @@ def run_tests(data_dir,weights_dir, models_list, device, batch_size=1):
         print(model_name, flush=True)
         _, model_path, arch, norm_type, patch_size = get_config(model_name, weights_dir=weights_dir)
 
-        model = load_weights(create_architecture(arch), model_path)
+        model = create_architecture(arch)
+        # # Load the weights
+        model = load_weights(model, model_path)
         model = model.to(device).eval()
 
         transform = list()
@@ -52,6 +55,9 @@ def run_tests(data_dir,weights_dir, models_list, device, batch_size=1):
         elif patch_size == 'ssp16':
             transform.append(Lambda(lambda img: patch_img(img, 16, 256)))
             transform_key = 'ssp16_%s' % norm_type
+        elif patch_size == 'laanet':
+            transform.append(Resize((384,384), interpolation=InterpolationMode.BICUBIC))
+            transform_key = 'laanet_%s' % norm_type
         elif isinstance(patch_size, tuple) or isinstance(patch_size, list):
             print('input resize:', patch_size, flush=True)
             transform.append(Resize(*patch_size))
@@ -93,7 +99,6 @@ def run_tests(data_dir,weights_dir, models_list, device, batch_size=1):
 
                 for model_name in do_models:
                     out_tens = models_dict[model_name][1](batch_img[models_dict[model_name][0]].clone().to(device)).cpu().numpy()
-
                     if out_tens.shape[1] == 1:
                         out_tens = out_tens[:, 0]
                     elif out_tens.shape[1] == 2:
@@ -133,7 +138,13 @@ if __name__=="__main__":
     if args['models'] is None:
         args['models'] = os.listdir(args['weights_dir'])
     else:
-        args['models'] = args['models'].split(',')    
+        args['models'] = args['models'].split(',')   
+
+    seed =317 #Put any random no.
+    random.seed(seed)
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    torch.cuda.manual_seed(seed) 
     
     table = run_tests(args['data_dir'], args['weights_dir'], args['models'], args['device'])
     if args['fusion']=='None':
