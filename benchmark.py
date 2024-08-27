@@ -14,7 +14,7 @@ from PIL import Image
 import random
 
 from torchvision.transforms  import CenterCrop, Resize, Compose, InterpolationMode, Lambda
-from utils.processing import make_normalize, prepare_data
+from utils.processing import make_normalize, prepare_data, RandomSizeCrop, rand_jpeg_compression
 from utils.fusion import apply_fusion
 from utils.patch import patch_img
 from networks import create_architecture, load_weights
@@ -27,7 +27,7 @@ def get_config(model_name, weights_dir='./weights'):
     model_path = os.path.join(weights_dir, model_name, data['weights_file'])
     return data['model_name'], model_path, data['arch'], data['norm_type'], data['patch_size']
 
-def run_tests(data_dir,weights_dir, models_list, device, batch_size=1):
+def run_tests(data_dir,weights_dir, models_list, device, post_process,batch_size=1):
     data_df = prepare_data(data_dir)
     img_path_table = data_df[['path']]
 
@@ -44,6 +44,10 @@ def run_tests(data_dir,weights_dir, models_list, device, batch_size=1):
         model = model.to(device).eval()
 
         transform = list()
+        if post_process:
+            transform.append(RandomSizeCrop(min_scale=0.625, max_scale=1.0))
+            transform.append(Resize((200,200), interpolation=InterpolationMode.BICUBIC))
+            transform.append(rand_jpeg_compression)
         if patch_size is None:
             print('input none', flush=True)
             transform_key = 'none_%s' % norm_type
@@ -133,6 +137,7 @@ if __name__=="__main__":
     parser.add_argument("--fusion"     , '-f', type=str, help="Fusion function", default='soft_or_prob')
     parser.add_argument("--device"     , '-d', type=str, help="Torch device", default='cuda:0')
     parser.add_argument("--batch_size"     , '-b', type=int, help="No. of images in a batch", default=1)
+    parser.add_argument("--post_process", '-p', action='store_true', help="whether to postprocess images or not")
     args = vars(parser.parse_args())
 
     if args['models'] is None:
@@ -146,7 +151,7 @@ if __name__=="__main__":
     np.random.seed(seed)
     torch.cuda.manual_seed(seed) 
     
-    table = run_tests(args['data_dir'], args['weights_dir'], args['models'], args['device'])
+    table = run_tests(args['data_dir'], args['weights_dir'], args['models'], args['device'],args['post_process'],args['batch_size'])
     if args['fusion']=='None':
         args['fusion']=None
     if args['fusion'] is not None:

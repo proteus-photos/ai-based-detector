@@ -636,3 +636,37 @@ class CenterCropPad:
         return img.crop(
             (crop_left, crop_top, crop_left + crop_width, crop_top + crop_height)
         )
+ 
+class RandomSizeCrop:
+    def __init__(self, min_scale=0.625, max_scale=1.0):
+        self.min_scale = min_scale
+        self.max_scale = max_scale
+
+    def __call__(self, img):
+        width, height = img.size
+        scale = random.uniform(self.min_scale, self.max_scale)
+        new_width = int(width * scale)
+        new_height = int(height * scale)
+        
+        # Ensure that the crop size is at least 1x1
+        new_width = max(1, new_width)
+        new_height = max(1, new_height)
+
+        i = random.randint(0, width - new_width)
+        j = random.randint(0, height - new_height)
+
+        return TF.crop(img, j, i, new_height, new_width)
+
+def rand_jpeg_compression(image):
+    # Random quality factor between 65 and 100
+    quality = random.randint(85, 100)
+    
+    # Save the image to an in-memory buffer with the selected quality
+    buffer = BytesIO()
+    image.save(buffer, format="JPEG", quality=quality)
+    
+    # Load the compressed image back from the buffer
+    buffer.seek(0)
+    compressed_image = Image.open(buffer)
+    
+    return compressed_image
