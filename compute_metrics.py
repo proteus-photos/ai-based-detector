@@ -22,14 +22,14 @@ def compute_metrics(data_dir, output_csv, metrics_fun):
     assert 'type' in table
     assert 'source' in table
     list_sources = sorted([source for source in set(table['source']) if table[table['source']==source]['type'].iloc[0]!='real'])
-    table['label'] = table['type']!='real' #0 for not real and 1 for real
+    table['label'] = table['type']!='real' #1 for not real and 0 for real
 
     tab_metrics = pd.DataFrame(index=list_algs, columns=list_sources)
     tab_metrics.loc[:, :] = np.nan
     for source in list_sources:
         tab_source = table[(table['type']=='real') | (table['source']==source)] # sub-table containing only of the ai sources and real images
         for alg in list_algs:    
-            score = tab_source[alg].values# .values convert data to numpy array
+            score = tab_source[alg].values -0.2# .values convert data to numpy array
             label = tab_source['label'].values
             if np.all(np.isfinite(score))==False:#makes sure all scores are finite
                 continue
