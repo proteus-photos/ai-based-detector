@@ -44,9 +44,8 @@ with torch.no_grad():
             probs = logits_per_image.softmax(dim =-1).cpu().numpy()
             for ind, prob in zip(batch_id, probs):
                 img_path_table.loc[ind, model_name] = prob[1] - 0.5
-            # for ind,logit in zip(batch_id, logits_per_image):
-            #     img_path_table.loc[ind, model_name] = logit[1].item()
             batch =list()
             batch_id=list()
+            # break
 
-img_path_table.to_csv('csvs/clipdetv2.5.csv',index=False)
+img_path_table.to_csv('../csvs/clipdetv2.5.csv',index=False)

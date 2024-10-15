@@ -48,6 +48,5 @@ with torch.no_grad():
             #     img_path_table.loc[ind, model_name] = logit[1].item()
             batch =list()
             batch_id=list()
-            break
 
-img_path_table.to_csv('csvs/clipdetv2.5.csv',index=False)
+img_path_table.to_csv('../csvs/clipdetv2.5.csv',index=False)

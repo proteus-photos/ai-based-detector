@@ -31,7 +31,7 @@ def prepare_data(data_dir):
             source_dir = os.path.join(type_dir,sdir)
             if not os.path.isdir(source_dir):  # Skip if not a directory
                 continue
-            img_list = [img for img in os.listdir(source_dir) if img.endswith('.png') ]
+            img_list = [img for img in os.listdir(source_dir) if img.endswith(('.png' , 'jpg')) ]
             img_path_list = [os.path.join(tdir,sdir,name) for name in img_list]
             for path in img_path_list:
                 data.append({'path':path,'source':sdir,'type':tdir})
@@ -663,6 +663,8 @@ def rand_jpeg_compression(image):
     
     # Save the image to an in-memory buffer with the selected quality
     buffer = BytesIO()
+    if image.mode == 'RGBA':
+        image = image.convert('RGB')
     image.save(buffer, format="JPEG", quality=quality)
     
     # Load the compressed image back from the buffer

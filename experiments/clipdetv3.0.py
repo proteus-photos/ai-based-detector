@@ -47,14 +47,10 @@ with torch.no_grad(),torch.amp.autocast('cuda'):
                 image_features /= image_features.norm(dim=-1, keepdim=True)
                 text_features /= text_features.norm(dim=-1, keepdim=True)
                 text_probs = (100.0 * image_features @ text_features.T).softmax(dim=-1)
-    #             logits_per_image, logits_per_text = model(batch, text)
-    #             probs = logits_per_image.softmax(dim =-1).cpu().numpy()
-                # print(text_probs)
                 for ind, prob in zip(batch_id, text_probs):
                     img_path_table.loc[ind, modelname] = prob[1].item() - 0.5
-    #             # for ind,logit in zip(batch_id, logits_per_image):
-    #             #     img_path_table.loc[ind, model_name] = logit[1].item()
+
             batch ={k: list() for k in transforms_dict}
             batch_id=list()
-img_path_table.to_csv('csvs/clipdetv3.0.csv',index=False)
+img_path_table.to_csv('../csvs/clipdetv3.0.csv',index=False)
 
