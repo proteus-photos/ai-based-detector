@@ -672,3 +672,9 @@ def rand_jpeg_compression(image):
     compressed_image = Image.open(buffer)
     
     return compressed_image
+
+def set_random_seed(seed=317):
+    random.seed(seed)
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    torch.cuda.manual_seed(seed)
