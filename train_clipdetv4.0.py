@@ -35,6 +35,7 @@ def initialize_models(model_list, device, post_process, next_to_last):
         transform = []
         if post_process:
             transform += [RandomSizeCrop(min_scale=0.625, max_scale=1.0), Resize((200, 200), interpolation=InterpolationMode.BICUBIC), rand_jpeg_compression]
+   
         model, _, preprocess = open_clip.create_model_and_transforms(modelname, pretrained=dataset)
         model.eval()
         model.to(device)
