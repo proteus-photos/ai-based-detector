@@ -14,8 +14,8 @@ if __name__=="__main__":
     clip_df =pd.read_csv(args['clip_csv'])
     other_df = pd.read_csv(args['other_csv'])
     table =clip_df[['path']].copy()
-    for col in other_df.columns:
+    for col in clip_df.columns:
         if col != 'path':
-            cname = f'fusion_{col}'
-            table[cname]=apply_fusion(pd.concat([clip_df['clipdet_latent10k_plus'],other_df[col]],axis=1).values,args['type'],axis=-1)
+            cname = f'fusion_{col[12:]}'
+            table[cname]=apply_fusion(pd.concat([clip_df[col],other_df['Corvi2023']],axis=1).values,args['type'],axis=-1)
     table.to_csv(args['out_csv'], index=False) 
