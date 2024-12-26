@@ -13,6 +13,7 @@ import numpy as np
 import open_clip
 from utils.processing import RandomSizeCrop, rand_jpeg_compression, set_random_seed, prepare_data
 from torch.utils.data import DataLoader, Dataset
+from pathlib import Path
 
 class TrainValDataset(Dataset):
     def __init__(self, img_path_table, transforms_dict, modelname, data_dir):
@@ -37,6 +38,7 @@ def parse_arguments():
     parser.add_argument('--batch_size', type=int, default=32, help='batch size')
     parser.add_argument('--weight_dir', type=str, default='finetune_weights', help='directory to store weights of trained models.')
     parser.add_argument('--train', action='store_true', help='Used to train the model')
+    parser.add_argument('--infer', action='store_true', help='Used to run inference')
     parser.add_argument('--postprocess', action='store_true', help='Whether to postprocess images or not')
     parser.add_argument('--next_to_last', action='store_true', help='Whether to take features from next to last layer or not.')
     parser.add_argument('--epochs', type=int, default=10, help='number of epochs')
@@ -143,15 +145,17 @@ def joint_train_clip_svm(models_dict, img_path_table, transforms_dict, data_dir,
         },  f"{checkpoint_path}.pth")
     wandb.finish()
 
+
+
 def validate_checkpoints(models_dict,img_path_table, transforms_dict, data_dir, batch_size, device,checkpoint_dir,epochs=5):
     for modelname in models_dict.keys():
-        wandb.init(project="clip-svm-validation", config={"batch_size": batch_size, "epochs": epochs,},name=modelname)
+        wandb.init(project="clip-svm-validation-modal", config={"batch_size": batch_size, "epochs": epochs,},name=modelname, id ='rrhcmcew',resume='must')
         model = models_dict[modelname]
         valdataset = TrainValDataset(img_path_table, transforms_dict, modelname, data_dir)
         valdataloader = DataLoader(valdataset, batch_size=batch_size, shuffle=False)
         # in_features =  model.visual.ln_post.normalized_shape[0]
-        svm = LinearSVM(in_features=1152).to(device)
-        for epoch in range(epochs):
+        svm = LinearSVM(in_features=1280).to(device)
+        for epoch in range(24,epochs):
             checkpoint_name =f'joint_model_{modelname}_epoch{epoch+1}.pth'
             checkpoint = torch.load(os.path.join(checkpoint_dir,checkpoint_name), map_location=device)
             model.load_state_dict(checkpoint['clip_model'])
@@ -175,8 +179,8 @@ def infer(models_dict, img_path_table, transforms_dict, data_dir, batch_size, de
     for modelname in models_dict.keys():
         model = models_dict[modelname]
         svm = LinearSVM(in_features=1280).to(device)
-        checkpoint_name =f'joint_model_{modelname}_epoch4.pth'
-        checkpoint = torch.load(os.path.join(checkpoint_dir,checkpoint_name), map_location=device)
+        checkpoint_name =f'joint_model_{modelname}_epoch21.pth'
+        checkpoint = torch.load(os.path.join(output_dir,checkpoint_name), map_location=device)
         model.load_state_dict(checkpoint['clip_model'])
         svm.load_state_dict(checkpoint['svm_model'])
         model.eval()
@@ -193,18 +197,19 @@ def infer(models_dict, img_path_table, transforms_dict, data_dir, batch_size, de
 
             if len(batch) >= batch_size or index == last_index:
                 batch = torch.stack(batch, dim=0)
-                features = model.visual.forward(images)
-                outputs = svm(features).squeeze()
-                all_image_features.append(features)
+                with torch.no_grad(), torch.amp.autocast(device_type='cuda'):
+                    features = model.visual.forward(batch)
+                    outputs = svm(features).squeeze().cpu()
+                all_image_features.extend(outputs.flatten())
                 all_ids.extend(batch_id)
                 batch, batch_id = [], []
 
-        all_image_features = np.vstack(all_image_features)
+        all_image_features = np.array(all_image_features)
         
-        modelname_column = f'joint_model_{modelname}_epoch4'
+        modelname_column = f'joint_model_{modelname}_epoch21'
         for ii, logit in zip(all_ids, all_image_features):
             final_table.loc[ii, modelname_column] = logit
-        final_table.to_csv(args.out_csv, index=False)
+        final_table.to_csv('csvs_post_64/finetuned_post.csv', index=False)
 
 def main():
     args = parse_arguments()
@@ -231,7 +236,7 @@ def main():
             validate_checkpoints(models_dict,img_path_table, transforms_dict,  args.data_dir, args.batch_size,  device, args.weight_dir, args.epochs)
         else:
             final_table = data_df[['path']]
-            infer(models_dict, img_path_table, transforms_dict, data_dir, batch_size, device, output_dir, final_table)
+            infer(models_dict, img_path_table, transforms_dict, args.data_dir, args.batch_size, device, args.weight_dir, final_table)
 
 if __name__ == "__main__":
     main()
