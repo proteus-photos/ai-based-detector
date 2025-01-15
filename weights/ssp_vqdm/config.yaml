@@ -1,6 +1,0 @@
-arch: ssp
-model_name: ssp_vqdm
-norm_type: resnet
-patch_size: ssp16
-weights_file: Net_epoch_best.pth
-  

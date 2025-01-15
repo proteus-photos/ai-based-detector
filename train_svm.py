@@ -8,13 +8,11 @@ import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
 from tqdm import tqdm
-
 import open_clip
 from PIL import Image
 from torchvision.transforms import Resize, Compose, InterpolationMode
 from utils.processing import prepare_data, RandomSizeCrop, rand_jpeg_compression, set_random_seed
 from torch.utils.data import DataLoader, Dataset
-
 
 # Argument parser setup
 def parse_arguments():
@@ -28,8 +26,9 @@ def parse_arguments():
     parser.add_argument('--epochs', type=int, default=5, help='number of epochs')
     parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
     parser.add_argument('--infer', action='store_true', help='Used for inference, csv output of logits')
-    return parser.parse_args()
+    parser.add_argument('--val', action='store_true', help='Used for validation.')
 
+    return parser.parse_args()
 
 class TrainValDataset(Dataset):
     def __init__(self, img_path_table, transforms_dict, modelname, data_dir):
@@ -47,6 +46,7 @@ class TrainValDataset(Dataset):
         image = Image.open(filepath)
         transformed_image = self.transforms_dict[self.modelname](image)
         return transformed_image, label
+
 # Custom Linear SVM Layer (using hinge loss)
 class LinearSVM(nn.Module):
     def __init__(self, in_features):
@@ -58,6 +58,7 @@ class LinearSVM(nn.Module):
 
     def hinge_loss(self, outputs, labels):
         return torch.mean(torch.clamp(1 - outputs * labels, min=0))
+
 # Initialize models and transforms
 def initialize_models(model_list, device, post_process, next_to_last):
     models_dict = {}
@@ -71,17 +72,16 @@ def initialize_models(model_list, device, post_process, next_to_last):
         model.eval()
         model.to(device)
         if next_to_last:
+            print(self.num_features = backbone.visual.proj.shape[0])
+            raise KeyboardInterrupt("Manually interrupting the execution")
             model.visual.proj = None
             model.visual.head = nn.Identity()
         models_dict[modelname] = model
         transforms_dict[modelname] = Compose(transform + [preprocess])
     return models_dict, transforms_dict
 
-
-
 # Feature extraction and SVM training
 def train_svm(models_dict, img_path_table, transforms_dict, data_dir, batch_size, device, output_dir, epochs=20,lr=1e-5):
-    
     
     for modelname in models_dict.keys():
         wandb.init(project="just-svm-finetuning", config={"batch_size": batch_size, "epochs": epochs,"learning_rate":lr})
@@ -175,6 +175,7 @@ def validate(models_dict,img_path_table, transforms_dict, data_dir, batch_size, 
             epoch_loss = total_loss / len(valdataloader)
             wandb.log({"epoch_loss":epoch_loss})
         wandb.finish()
+
 # Load SVM model and perform evaluation
 def infer(models_dict, final_table, transforms_dict, data_dir, batch_size, device, checkpoint_dir, ep):
     for modelname in models_dict.keys():
@@ -226,23 +227,24 @@ def main():
     data_df = prepare_data(args.data_dir)
     data_df['label'] = np.where(data_df['type'] == 'real', -1, 1)
     img_path_table = data_df[['path', 'label']]
+
     model_list = [
-        ('ViT-SO400M-14-SigLIP', 'webli'),
-        ('ViT-SO400M-14-SigLIP-384', 'webli'),
-        ('ViT-H-14-quickgelu', 'dfn5b'),
-        ('ViT-H-14-378-quickgelu', 'dfn5b'),
+        ('ViT-L-14','openai')##
+        # ('ViT-SO400M-14-SigLIP', 'webli'),
+        # ('ViT-SO400M-14-SigLIP-384', 'webli'),
+        # ('ViT-H-14-quickgelu', 'dfn5b'),
+        # ('ViT-H-14-378-quickgelu', 'dfn5b'),
     ]
     
     models_dict, transforms_dict = initialize_models(model_list, device, args.postprocess, args.next_to_last)
     
     if args.train:
         train_svm(models_dict, img_path_table, transforms_dict, args.data_dir, args.batch_size, device, args.weight_dir,args.epochs,args.lr)
-    else:
-        if not args.infer:
-            validate(models_dict,img_path_table, transforms_dict,  args.data_dir, args.batch_size,  device, args.weight_dir, args.epochs)
-        else:
-            final_table = data_df[['path']]
-            infer(models_dict, final_table, transforms_dict, args.data_dir, args.batch_size, device, args.weight_dir, args.epochs)
+    elif args.val:
+        validate(models_dict,img_path_table, transforms_dict,  args.data_dir, args.batch_size,  device, args.weight_dir, args.epochs)
+    elif args.infer:
+        final_table = data_df[['path']]
+        infer(models_dict, final_table, transforms_dict, args.data_dir, args.batch_size, device, args.weight_dir, args.epochs)
 
 if __name__ == "__main__":
     main()

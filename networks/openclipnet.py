@@ -13,7 +13,7 @@ dict_pretrain = {
     'clipL14laion400m'  : ('ViT-L-14', 'laion400m_e32'),
     'clipL14laion2B'    : ('ViT-L-14', 'laion2b_s32b_b82k'),
     'clipL14datacomp'   : ('ViT-L-14', 'laion/CLIP-ViT-L-14-DataComp.XL-s13B-b90K', 'open_clip_pytorch_model.bin'),
-    'clipL14commonpool' : ('ViT-L-14', "laion/CLIP-ViT-L-14-CommonPool.XL-s13B-b90K", 'open_clip_pytorch_model.bin'),
+    'clipL14commonpool' : ('ViT-L-14', "laion/CLIP-ViT-L-14-CommonPool.XL-s13B-b90K", 'open_clip_pytorch_model.bin'), ####
     'clipaL14datacomp'  : ('ViT-L-14-CLIPA', 'datacomp1b'),
     'cocaL14laion2B'    : ('coca_ViT-L-14', 'laion2b_s13b_b90k'),
     'clipg14laion2B'    : ('ViT-g-14', 'laion2b_s34b_b88k'),
