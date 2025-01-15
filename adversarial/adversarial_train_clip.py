@@ -1,3 +1,4 @@
+#Modified from https://github.com/chs20/RobustVLM
 import sys
 from adversarial.ImageNetDataset
 
@@ -436,24 +437,6 @@ def main(args):
             transform=preprocessor_without_normalize,
         )
 
-    elif args.dataset == 'segment_anything':
-        dataset = SamData('/data/naman_deep_singh/datasets/newSAM', transform=preprocessor_without_normalize)
-
-        print(dataset.__len__())
-    elif args.dataset == 'coco':
-        if os.path.exists('/mnt/datasets/coco'):
-            image_dir_path = '/mnt/datasets/coco/train2017'
-            annotations_path = '/mnt/datasets/coco/annotations/captions_train2017.json'
-        elif os.path.exists('/mnt/lustre'):
-            image_dir_path = '/mnt/lustre/hein/cschlarmann37/datasets/coco/train2017'
-            annotations_path = '/mnt/lustre/hein/cschlarmann37/datasets/coco/annotations/captions_train2017.json'
-        else:
-            raise ValueError('COCO dataset not found')
-        dataset = COCOFlickrDataset(
-            image_dir_path=image_dir_path,
-            annotations_path=annotations_path,
-            transform=preprocessor_without_normalize
-        )
     dataset_eval = ImageNetDataset(
         # root=args.imagenet_root + '/val',
         root = VOL2_PATH / 'data/imagenet/val',
