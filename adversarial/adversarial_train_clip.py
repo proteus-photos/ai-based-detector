@@ -1,9 +1,7 @@
 import sys
+from adversarial.ImageNetDataset
 
-from train.datasets import COCOFlickrDataset, ImageNetDataset
-from CLIP_eval.eval_utils import load_clip_model
 
-sys.path.append("open_flamingo")
 import os
 import shutil
 import time
@@ -15,17 +13,12 @@ import open_clip
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-# from training.scheduler import cosine_lr
-from CLIP_benchmark.clip_benchmark.metrics.linear_probe import cosine_lr
 from torchvision import transforms
-from open_flamingo.eval.classification_utils import IMAGENET_1K_CLASS_ID_TO_LABEL
+from adversarial.data import IMAGENET_1K_CLASS_ID_TO_LABEL
 from train.pgd_train import pgd
-from train.apgd_train import apgd_train as apgd
+from adversarial.attacks import apgd_train as apgd
 import wandb
-from train.utils import init_wandb, AverageMeter
-from train.sam_data import SamData
-from open_flamingo.eval.models.utils import unwrap_model
-from train.utils import str2bool
+from adversarial.utils import init_wandb, AverageMeter, str2bool,unwrap_model, cosine_lr
 
 import argparse
 import modal
@@ -84,29 +77,6 @@ parser.add_argument('--output_dir', type=str, default='', help='Output directory
 parser.add_argument('--save_checkpoints', type=str2bool, default=True, help='Save 10 training checkpoints')
 parser.add_argument('--devices', type=str, default='', help='Device IDs for CUDA')
 
-with robust_finetune_image.imports():
-    import os
-    import shutil
-    import time
-    import string
-    import random
-
-    import numpy as np
-    import open_clip
-    import torch
-    import torch.nn.functional as F
-    from torch.utils.data import DataLoader
-    # from training.scheduler import cosine_lr
-    from CLIP_benchmark.clip_benchmark.metrics.linear_probe import cosine_lr
-    from torchvision import transforms
-    from open_flamingo.eval.classification_utils import IMAGENET_1K_CLASS_ID_TO_LABEL
-    from train.pgd_train import pgd
-    from train.apgd_train import apgd_train as apgd
-    import wandb
-    from train.utils import init_wandb, AverageMeter
-    from train.sam_data import SamData
-    from open_flamingo.eval.models.utils import unwrap_model
-    from train.utils import str2bool
     #
 @app.function(image=robust_finetune_image,secrets=[wandb_secret], volumes={VOL1_PATH: volume1,VOL2_PATH: volume2}, gpu = "a100-80gb:4",timeout=24*60*60 )
 def main(args):
@@ -441,7 +411,9 @@ def main(args):
         assert str(args.start_step) in args.optimizer_state
         assert args.pretrained in ['', 'none']
         args.pretrained = args.optimizer_state.replace('_opt', '')
-    model, _, _ = load_clip_model(args.clip_model_name, args.pretrained)
+    model, _, _ = lopen_clip.create_model_and_transforms(
+        args.clip_model_name, pretrained=args.pretrained
+    )
 
     # Remove the Normalize transform by creating a new Compose object
     preprocessor_without_normalize = transforms.Compose(image_processor.transforms[:-1])
