@@ -1,7 +1,6 @@
 import modal
-from utils.processing import RandomSizeCrop, rand_jpeg_compression, set_random_seed, prepare_data
+from utils.processing import set_random_seed, prepare_data
 from pathlib import Path
-# from torch.utils.data import DataLoader, Dataset  
 
 app = modal.App('proteus')
 
@@ -21,17 +20,15 @@ with finetune_image.imports():
     import torch
     import argparse
     import wandb
-    import torch.nn as nn
     import torch.optim as optim
     import torch.nn.functional as F
     from tqdm import tqdm
     from sklearn.metrics import classification_report
-    from torchvision.transforms import Compose, Resize, InterpolationMode
     import numpy as np
-    import open_clip
-    from torch.utils.data import DataLoader, Dataset  
+    from torch.utils.data import DataLoader 
     from PIL import Image
     import os
+    from utils.helper import TrainValDataset, LinearSVM, initialize_models
 
 volume = modal.Volume.from_name("finetune-volume", create_if_missing=True)
 VOL_PATH = Path("/finetune_volume")
@@ -42,6 +39,8 @@ def parse_arguments():
     parser.add_argument('--batch_size', type=int, default=32, help='batch size')
     parser.add_argument('--weight_dir', type=str, default='finetune_weights64', help='directory to store weights of trained models.')
     parser.add_argument('--train', action='store_true', help='Used to train the model')
+    parser.add_argument('--infer', action='store_true', help='Used to infer from the model')
+    parser.add_argument('--attack', type=str, default=None, help='Used to evaluate on adversarial examples')
     parser.add_argument('--postprocess', action='store_true', help='Whether to postprocess images or not')
     parser.add_argument('--next_to_last', action='store_true', help='Whether to take features from next to last layer or not.')
     parser.add_argument('--epochs', type=int, default=10, help='number of epochs')
@@ -54,53 +53,6 @@ def parse_arguments():
 
 @app.function(image=finetune_image,secrets=[wandb_secret], volumes={VOL_PATH: volume}, gpu = "a100-80gb",timeout=24*60*60 )
 def finetune(model_list,img_path_table,data_dir,batch_size,device,output_dir,post_process,next_to_last,is_train,epochs=10, lr=1e-5):
-
-    class TrainValDataset(Dataset):
-        def __init__(self, img_path_table, transforms_dict, modelname, data_dir):
-            self.img_path_table = img_path_table
-            self.transforms_dict = transforms_dict
-            self.modelname = modelname
-            self.data_dir = data_dir
-
-        def __len__(self):
-            return len(self.img_path_table)
-
-        def __getitem__(self, index):
-            filepath = os.path.join(self.data_dir, self.img_path_table.iloc[index]['path'])
-            label = self.img_path_table.iloc[index]['label']
-            image = Image.open(filepath)
-            transformed_image = self.transforms_dict[self.modelname](image)
-            return transformed_image, label
-
-    class LinearSVM(nn.Module):
-        def __init__(self, in_features):
-            super(LinearSVM, self).__init__()
-            self.fc = nn.Linear(in_features, 1)  # Single output for binary classification
-
-        def forward(self, x):
-            return self.fc(x)
-
-        def hinge_loss(self, outputs, labels):
-            return torch.mean(torch.clamp(1 - outputs * labels, min=0))
-
-    def initialize_models(model_list, post_process, next_to_last, is_train):
-        print("INITIALISING")
-        models_dict = {}
-        transforms_dict = {}
-        for modelname, dataset in model_list:
-            transform = []
-            if post_process:
-                transform += [RandomSizeCrop(min_scale=0.625, max_scale=1.0), Resize((200, 200), interpolation=InterpolationMode.BICUBIC), rand_jpeg_compression]
-            if is_train:#Load pretrained model for finetuning !    
-                model, _, preprocess = open_clip.create_model_and_transforms(modelname, pretrained=dataset)
-            else:#Load random weights initially;later load checkpoints
-                model, _, preprocess = open_clip.create_model_and_transforms(modelname, pretrained=None)
-            if next_to_last:
-                model.visual.proj = None
-                #model.visual.head = None
-            models_dict[modelname] = model
-            transforms_dict[modelname] = Compose(transform + [preprocess])
-        return models_dict, transforms_dict        
 
     def joint_train_clip_svm(models_dict, img_path_table, transforms_dict, data_dir, batch_size, device, output_dir, epochs=10, lr=1e-5):
         data_dir = VOL_PATH / data_dir
@@ -180,6 +132,8 @@ def finetune(model_list,img_path_table,data_dir,batch_size,device,output_dir,pos
     joint_train_clip_svm(models_dict, img_path_table, transforms_dict, data_dir, batch_size, device, output_dir, epochs, lr)
 
 
+
+
 @app.local_entrypoint()
 def main():
     args = parse_arguments()
@@ -202,6 +156,10 @@ def main():
             with app.run():
                 finetune.remote(filtered_list, img_path_table, args.data_dir, args.batch_size, device, args.weight_dir,args.postprocess,args.next_to_last,args.train, args.epochs, args.lr)
                 # finetune_ddp.remote(0,3,filtered_list, img_path_table, args.data_dir, args.batch_size, args.weight_dir,args.postprocess,args.next_to_last,args.train, args.epochs, args.lr)
+
+    elif args.infer:
+        with modal.enable_output():
+            with app.run():
 
     
 if __name__ == "__main__":

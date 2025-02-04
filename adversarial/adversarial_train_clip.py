@@ -36,13 +36,17 @@ robust_finetune_image = (
     .run_commands("pip install --upgrade pip")
     .pip_install_from_requirements("requirements.txt")
     .pip_install("wandb")
+    .add_local_dir("data/imagenet", remote_path="/imagenet")
 )
 
 wandb_secret = modal.Secret.from_name('wandb-secret')
-volume1 = modal.Volume.from_name("finetune-volume", create_if_missing=True)
-volume2 = modal.Volume.from_name("adv-volume", create_if_missing=True)
-VOL1_PATH = Path("/finetune-volume")
-VOL2_PATH = Path("/adv-volume")
+# volume1 = modal.Volume.from_name("finetune-volume", create_if_missing=True)
+# volume2 = modal.Volume.from_name("adv-volume", create_if_missing=True)
+# VOL1_PATH = Path("/finetune-volume")
+# VOL2_PATH = Path("/adv-volume")
+
+out_vol = modal.Volume.from_name("out-volume", create_if_missing=True)
+OUT_PATH = Path('/output')
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--clip_model_name', type=str, default='ViT-L-14', help='ViT-L-14, ViT-B-32')
@@ -80,8 +84,13 @@ parser.add_argument('--save_checkpoints', type=str2bool, default=True, help='Sav
 parser.add_argument('--devices', type=str, default='', help='Device IDs for CUDA')
 
     #
-@app.function(image=robust_finetune_image,secrets=[wandb_secret], volumes={VOL1_PATH: volume1,VOL2_PATH: volume2}, gpu = "a100-80gb:4",timeout=24*60*60 )
+@app.function(image=robust_finetune_image,secrets=[wandb_secret], volumes={OUT_PATH: out_vol}, gpu = "a100-80gb:4",timeout=10*24*60*60 )
 def main(args):
+    DATA_PATH = Path('/imagenet')
+    train_dirs = os.listdir(DATA_PATH/'train')
+    print(f'TRAIN DIRS: {len(train_dirs)}')
+    val_dirs = os.listdir(DATA_PATH/'val/mixed')
+    print(f'VAL FILES: {len(val_dirs)}')
     num_gpus = torch.cuda.device_count()
     if num_gpus > 1:
         print(f'Number of GPUs available: {num_gpus}')
@@ -378,13 +387,13 @@ def main(args):
     if args.dataset == 'imagenet':
         dataset = ImageNetDataset(
             # root=args.imagenet_root + '/val',
-            root =VOL1_PATH / 'data/train',
+            root =DATA_PATH / 'train',
             transform=preprocessor_without_normalize,
         )
 
     dataset_eval = ImageNetDataset(
         # root=args.imagenet_root + '/val',
-        root = VOL2_PATH / 'data/imagenet/val',
+        root = DATA_PATH / 'val',
         transform=preprocessor_without_normalize,
     )
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, drop_last=True)

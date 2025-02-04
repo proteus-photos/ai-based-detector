@@ -36,7 +36,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Finetune entire model')
     parser.add_argument('--data_dir', type=str, default='data/trainclip', help='path of directory that contains data in two folders i.e. real and ai-gen')
     parser.add_argument('--batch_size', type=int, default=32, help='batch size')
-    parser.add_argument('--weight_dir', type=str, default='finetune_weights', help='directory to store weights of trained models.')
+    parser.add_argument('--weight_dir', type=str, default='weights', help='directory to store weights of trained models.')
     parser.add_argument('--train', action='store_true', help='Used to train the model')
     parser.add_argument('--infer', action='store_true', help='Used to run inference')
     parser.add_argument('--postprocess', action='store_true', help='Whether to postprocess images or not')
@@ -122,7 +122,7 @@ def train_clip_svm(model, svm, dataloader, device, optimizer,checkpoint_base_pat
 
 # Modify SVM training to jointly train CLIP backbone and SVM
 def joint_train_clip_svm(models_dict, img_path_table, transforms_dict, data_dir, batch_size, device, output_dir, epochs=10, lr=1e-4):
-
+    
     wandb.init(project="clip-svm-finetuning", config={"batch_size": batch_size, "epochs": epochs,"learning_rate":lr})
     for modelname in models_dict.keys():
         traindataset = TrainValDataset(img_path_table, transforms_dict, modelname, data_dir)
@@ -176,10 +176,12 @@ def validate_checkpoints(models_dict,img_path_table, transforms_dict, data_dir, 
         wandb.finish()
 
 def infer(models_dict, img_path_table, transforms_dict, data_dir, batch_size, device, output_dir, final_table,alpha=0):
+    import time
     for modelname in models_dict.keys():
+        img_path_table = img_path_table[:1000]
         model = models_dict[modelname]
         svm = LinearSVM(in_features=1280).to(device)
-        checkpoint_name =f'joint_model_{modelname}_epoch21.pth'
+        checkpoint_name =f'joint_model_{modelname}_epoch3.pth'
         checkpoint = torch.load(os.path.join(output_dir,checkpoint_name), map_location=device)
         model.load_state_dict(checkpoint['clip_model'])
         svm.load_state_dict(checkpoint['svm_model'])
@@ -188,6 +190,9 @@ def infer(models_dict, img_path_table, transforms_dict, data_dir, batch_size, de
         all_image_features, all_ids = [], []
         batch, batch_id = [], []
         last_index = img_path_table.index[-1]
+        T1=0
+        T2=0
+        t1=time.time()
         for index in tqdm(img_path_table.index, total=len(img_path_table)):
             filepath = os.path.join(data_dir, img_path_table.loc[index, 'path'])
             image = Image.open(filepath)
@@ -196,6 +201,7 @@ def infer(models_dict, img_path_table, transforms_dict, data_dir, batch_size, de
             batch_id.append(index)
 
             if len(batch) >= batch_size or index == last_index:
+                t3=time.time()
                 batch = torch.stack(batch, dim=0)
                 with torch.no_grad(), torch.amp.autocast(device_type='cuda'):
                     features = model.visual.forward(batch)
@@ -203,13 +209,18 @@ def infer(models_dict, img_path_table, transforms_dict, data_dir, batch_size, de
                 all_image_features.extend(outputs.flatten())
                 all_ids.extend(batch_id)
                 batch, batch_id = [], []
+                t4=time.time()
+                T2+=(t4-t3)
 
         all_image_features = np.array(all_image_features)
         
-        modelname_column = f'joint_model_{modelname}_epoch21'
+        modelname_column = f'joint_model_{modelname}_epoch3'
         for ii, logit in zip(all_ids, all_image_features):
             final_table.loc[ii, modelname_column] = logit
-        final_table.to_csv('csvs_post_64/finetuned_post.csv', index=False)
+        t2=time.time()
+        print(f'---TIME1----: {t2-t1}')
+        print(f'---TIME2----: {T2/1000}')
+        final_table.to_csv('csvs_test/finetuned_post.csv', index=False)
 
 def main():
     args = parse_arguments()
