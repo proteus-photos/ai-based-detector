@@ -4,6 +4,8 @@ import torch
 from torchvision.transforms import Compose, Resize, InterpolationMode
 import open_clip
 from utils.processing import RandomSizeCrop, rand_jpeg_compression
+import os
+from PIL import Image
 
 
 class TrainValDataset(Dataset):
@@ -37,7 +39,7 @@ class InferDataset(Dataset):
         filepath = os.path.join(self.data_dir, self.img_path_table.loc[index, 'path'])
         label = self.img_path_table.iloc[index]['label']
         image = Image.open(filepath)
-        image = self.transform(image).to(device)
+        image = self.transform(image)
         return image, index,label
 
 class LinearSVM(nn.Module):

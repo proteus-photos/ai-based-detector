@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 import random
-from train.utils import project_perturbation, normalize_grad
+from adversarial.utils import project_perturbation, normalize_grad
 
 # from fra31/robust-finetuning
 
@@ -124,6 +124,8 @@ def check_oscillation(x, j, k, y5, k3=0.75):
 
 def apgd_train(model, x, y, norm, eps, n_iter=10, use_rs=False, loss_fn=None,
                verbose=False, is_train=True, initial_stepsize=None):
+
+    print(model.training)
     assert not model.training
     norm = norm.replace('linf', 'Linf').replace('l2', 'L2')
     device = x.device
@@ -178,7 +180,7 @@ def apgd_train(model, x, y, norm, eps, n_iter=10, use_rs=False, loss_fn=None,
     # grad = torch.zeros_like(x)
     # for _ in range(self.eot_iter)
     # with torch.enable_grad()
-    logits = model(x_adv, output_normalize=True)
+    logits = F.normalize(model(x_adv), dim =-1)
     loss_indiv = loss_fn(logits, y)
     loss = loss_indiv.sum()
     # grad += torch.autograd.grad(loss, [x_adv])[0].detach()
@@ -189,6 +191,7 @@ def apgd_train(model, x, y, norm, eps, n_iter=10, use_rs=False, loss_fn=None,
     loss_indiv.detach_()
     loss.detach_()
 
+    print(logits.detach())
     acc = logits.detach().max(1)[1] == y
     acc_steps[0] = acc + 0
     loss_best = loss_indiv.detach().clone()

@@ -217,7 +217,7 @@ def infer(model_list,img_path_table,data_dir,batch_size,output_dir,post_process,
         #         all_image_features.extend(outputs.flatten())
         #         all_ids.extend(batch_id)
         dataset = ImageDataset(img_path_table, data_dir, transforms_dict[modelname])
-        dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=4, pin_memory=True)
+        dataloader = DataLoader(dataset, batch_size=batch_size, pin_memory=True)
 
         # Initialize storage
         all_image_features, all_ids = [], []
@@ -225,6 +225,7 @@ def infer(model_list,img_path_table,data_dir,batch_size,output_dir,post_process,
         # Process batches
         with torch.no_grad(), torch.amp.autocast(device_type='cuda'):
             for batch, batch_id, targets in tqdm(dataloader, total=len(dataloader)):
+                batch = batch.to(device)
                 if attack=='apgd':
                     batch = apgd(
                     model=model,
@@ -233,10 +234,10 @@ def infer(model_list,img_path_table,data_dir,batch_size,output_dir,post_process,
                     y=targets,
                     norm='linf',
                     eps=4,
-                    n_iter=args.iterations_adv,#FIX THIS
+                    n_iter=100,
                     verbose=True
 
-                batch = batch.to(device)  # Move batch to GPU
+                  # Move batch to GPU
                 features = model.visual.forward(batch)
                 outputs = svm(features).squeeze().cpu()
                 all_image_features.extend(outputs.flatten())
@@ -244,7 +245,7 @@ def infer(model_list,img_path_table,data_dir,batch_size,output_dir,post_process,
                 # batch, batch_id = [], []
 
         all_image_features = np.array(all_image_features)
-        
+        final_table = img_path_table['path']
         modelname_column = f'joint_model_{modelname}_epoch3'
         for ii, logit in zip(all_ids, all_image_features):
             final_table.loc[ii, modelname_column] = logit

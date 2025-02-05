@@ -1,36 +1,18 @@
 import argparse
 import torch
 import wandb
-import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+import torch.nn as nn
 from tqdm import tqdm
-from sklearn.metrics import classification_report
-from torchvision.transforms import Compose, Resize, InterpolationMode
 from PIL import Image
 import os
 import numpy as np
-import open_clip
-from utils.processing import RandomSizeCrop, rand_jpeg_compression, set_random_seed, prepare_data
-from torch.utils.data import DataLoader, Dataset
+from utils.processing import set_random_seed, prepare_data
+from torch.utils.data import DataLoader
 from pathlib import Path
-
-class TrainValDataset(Dataset):
-    def __init__(self, img_path_table, transforms_dict, modelname, data_dir):
-        self.img_path_table = img_path_table
-        self.transforms_dict = transforms_dict
-        self.modelname = modelname
-        self.data_dir = data_dir
-
-    def __len__(self):
-        return len(self.img_path_table)
-
-    def __getitem__(self, index):
-        filepath = os.path.join(self.data_dir, self.img_path_table.iloc[index]['path'])
-        label = self.img_path_table.iloc[index]['label']
-        image = Image.open(filepath)
-        transformed_image = self.transforms_dict[self.modelname](image)
-        return transformed_image, label
+from utils.helper import TrainValDataset, LinearSVM, initialize_models, InferDataset
+from adversarial.attacks import apgd_train as apgd
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Finetune entire model')
@@ -44,38 +26,9 @@ def parse_arguments():
     parser.add_argument('--epochs', type=int, default=10, help='number of epochs')
     parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
     parser.add_argument('--modelname', type=str, required=True, help='name of model')
+    parser.add_argument('--inner_loss',type=str, default='ce',help='loss for generating adversarial examples')
+    parser.add_argument('--attack', type=str, default=None, help='Used to evaluate on adversarial examples')
     return parser.parse_args()
-
-def initialize_models(model_list, device, post_process, next_to_last, is_train):
-    models_dict = {}
-    transforms_dict = {}
-    for modelname, dataset in model_list:
-        transform = []
-        if post_process:
-            transform += [RandomSizeCrop(min_scale=0.625, max_scale=1.0), Resize((200, 200), interpolation=InterpolationMode.BICUBIC), rand_jpeg_compression]
-        if is_train:#Load pretrained model for finetuning !    
-            model, _, preprocess = open_clip.create_model_and_transforms(modelname, pretrained=dataset)
-        else:#Load random weights initially;later load checkpoints
-            model, _, preprocess = open_clip.create_model_and_transforms(modelname, pretrained=None)
-        model.to(device)
-        if next_to_last:
-            model.visual.proj = None
-            #model.visual.head = None
-        models_dict[modelname] = model
-        transforms_dict[modelname] = Compose(transform + [preprocess])
-    return models_dict, transforms_dict
-
-# Custom Linear SVM Layer (using hinge loss)
-class LinearSVM(nn.Module):
-    def __init__(self, in_features):
-        super(LinearSVM, self).__init__()
-        self.fc = nn.Linear(in_features, 1)  # Single output for binary classification
-
-    def forward(self, x):
-        return self.fc(x)
-
-    def hinge_loss(self, outputs, labels):
-        return torch.mean(torch.clamp(1 - outputs * labels, min=0))
 
 
 # Training loop for joint fine-tuning CLIP and SVM
@@ -175,11 +128,22 @@ def validate_checkpoints(models_dict,img_path_table, transforms_dict, data_dir, 
             wandb.log({"epoch_loss":total_loss})
         wandb.finish()
 
-def infer(models_dict, img_path_table, transforms_dict, data_dir, batch_size, device, output_dir, final_table,alpha=0):
-    import time
+def infer(model_list,img_path_table,data_dir,batch_size,output_dir,post_process,next_to_last,is_train,inner_loss,attack=None):
+
+    def ce(out, targets, reduction='mean'):
+        # out = logits
+        assert out.shape[0] == targets.shape[0], (out.shape, targets.shape)
+        assert out.shape[0] > 1
+
+        return F.cross_entropy(out, targets, reduction=reduction)
+
+    def hinge_loss(outputs, labels):
+        return torch.mean(torch.clamp(1 - outputs * labels, min=0))
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    models_dict, transforms_dict = initialize_models(model_list,  post_process,next_to_last, is_train)
     for modelname in models_dict.keys():
-        img_path_table = img_path_table[:1000]
-        model = models_dict[modelname]
+        model = models_dict[modelname].to(device)
         svm = LinearSVM(in_features=1280).to(device)
         checkpoint_name =f'joint_model_{modelname}_epoch3.pth'
         checkpoint = torch.load(os.path.join(output_dir,checkpoint_name), map_location=device)
@@ -188,39 +152,55 @@ def infer(models_dict, img_path_table, transforms_dict, data_dir, batch_size, de
         model.eval()
         svm.eval()
         all_image_features, all_ids = [], []
-        batch, batch_id = [], []
+        # batch, batch_id = [], []
         last_index = img_path_table.index[-1]
-        T1=0
-        T2=0
-        t1=time.time()
-        for index in tqdm(img_path_table.index, total=len(img_path_table)):
-            filepath = os.path.join(data_dir, img_path_table.loc[index, 'path'])
-            image = Image.open(filepath)
-            transformed_image = transforms_dict[modelname](image).to(device)
-            batch.append(transformed_image)
-            batch_id.append(index)
+        dataset = InferDataset(img_path_table, data_dir, transforms_dict[modelname])
+        dataloader = DataLoader(dataset, batch_size=batch_size, pin_memory=True)
 
-            if len(batch) >= batch_size or index == last_index:
-                t3=time.time()
-                batch = torch.stack(batch, dim=0)
-                with torch.no_grad(), torch.amp.autocast(device_type='cuda'):
-                    features = model.visual.forward(batch)
-                    outputs = svm(features).squeeze().cpu()
+        # Initialize storage
+        all_image_features, all_ids = [], []
+        class FullModel(nn.Module):
+            def __init__(self, feature_extractor, classifier):
+                super().__init__()
+                self.feature_extractor = feature_extractor  # model.visual
+                self.classifier = classifier  # svm
+
+            def forward(self, x):
+                features = self.feature_extractor(x)  # Extract features
+                outputs = self.classifier(features).squeeze().cpu()  # Apply SVM
+                return outputs
+        full_model = FullModel(model.visual,svm).eval()
+        # Process batches
+        
+        for batch, batch_id, targets in tqdm(dataloader, total=len(dataloader)):
+            batch = batch.to(device)
+
+            if attack=='apgd':
+                batch = apgd(
+                model=full_model,
+                loss_fn=hinge_loss,
+                x=batch,
+                y=targets,
+                norm='linf',
+                eps=4,
+                n_iter=100,
+                verbose=True
+                )
+                
+            with torch.no_grad(), torch.amp.autocast(device_type='cuda'):
+                features = model.visual.forward(batch)
+                outputs = svm(features).squeeze().cpu()
                 all_image_features.extend(outputs.flatten())
-                all_ids.extend(batch_id)
-                batch, batch_id = [], []
-                t4=time.time()
-                T2+=(t4-t3)
+                all_ids.extend(batch_id.tolist())
+            # batch, batch_id = [], []
 
         all_image_features = np.array(all_image_features)
         
         modelname_column = f'joint_model_{modelname}_epoch3'
+        final_table = img_path_table[['path']]
         for ii, logit in zip(all_ids, all_image_features):
             final_table.loc[ii, modelname_column] = logit
-        t2=time.time()
-        print(f'---TIME1----: {t2-t1}')
-        print(f'---TIME2----: {T2/1000}')
-        final_table.to_csv('csvs_test/finetuned_post.csv', index=False)
+        final_table.to_csv('csvs_adv/nonrobust_hinge.csv', index=False)
 
 def main():
     args = parse_arguments()
@@ -237,17 +217,15 @@ def main():
         ('ViT-H-14-378-quickgelu', 'dfn5b'),#
     ]
     filtered_list = [item for item in model_list if item[0]==args.modelname]
-    models_dict, transforms_dict = initialize_models(filtered_list, device, args.postprocess, args.next_to_last,args.train)
-    print(models_dict.keys())
+    # models_dict, transforms_dict = initialize_models(filtered_list, args.postprocess, args.next_to_last,args.train)
+    # print(models_dict.keys())
     print(args.train)
     if args.train:
         joint_train_clip_svm(models_dict, img_path_table, transforms_dict, args.data_dir, args.batch_size, device, args.weight_dir, args.epochs, args.lr)
+    elif args.infer:
+        infer(filtered_list, img_path_table, args.data_dir, args.batch_size, args.weight_dir,args.postprocess,args.next_to_last,args.train, args.inner_loss, args.attack)
     else:
-        if not args.infer:
-            validate_checkpoints(models_dict,img_path_table, transforms_dict,  args.data_dir, args.batch_size,  device, args.weight_dir, args.epochs)
-        else:
-            final_table = data_df[['path']]
-            infer(models_dict, img_path_table, transforms_dict, args.data_dir, args.batch_size, device, args.weight_dir, final_table)
-
+        validate_checkpoints(models_dict,img_path_table, transforms_dict,  args.data_dir, args.batch_size,  device, args.weight_dir, args.epochs)
+        
 if __name__ == "__main__":
     main()
