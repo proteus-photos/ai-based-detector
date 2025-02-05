@@ -149,27 +149,44 @@ def infer(model_list,img_path_table,data_dir,batch_size,output_dir,post_process,
     def hinge_loss(outputs, labels):
         return torch.mean(torch.clamp(1 - outputs * labels, min=0))
 
-    class ComputeLossWrapper:
-        def __init__(self, embedding_orig, embedding_text_labels_norm, reduction='mean', loss=None,
-                    logit_scale=100.):
-            self.embedding_orig = embedding_orig
-            self.embedding_text_labels_norm = embedding_text_labels_norm
-            self.reduction = reduction
-            self.loss_str = loss
-            self.logit_scale = logit_scale
+    # def compute_loss(loss_str, embedding, targets, embedding_orig, logit_scale,
+    #                 embedding_text_labels_norm=None, reduction='mean'):
+    #     if loss_str == 'l2':
+    #         loss = l2(out=embedding, targets=embedding_orig, reduction=reduction)
+    #     elif loss_str == 'ce':
+    #         loss = ce(
+    #             out=embedding @ (logit_scale * embedding_text_labels_norm),
+    #             targets=targets,
+    #             reduction=reduction
+    #         )
+    #     elif loss_str == 'hinge':
+    #         loss = hinge_loss(embedding,targets)
+    #     else:
+    #         raise ValueError(f'loss {loss_str} not supported')
+    #     return loss
 
-        def __call__(self, embedding, targets):
-            return compute_loss(
-                loss_str=self.loss_str, embedding=embedding, targets=targets,
-                embedding_orig=self.embedding_orig, logit_scale=self.logit_scale,
-                embedding_text_labels_norm=self.embedding_text_labels_norm, reduction=self.reduction
-                )
 
-    loss_inner_wrapper = ComputeLossWrapper(
-        embedding_orig, embedding_text_labels_norm,
-        reduction='none' if attack == 'apgd' else 'mean', loss=args.inner_loss,
-        logit_scale=100.
-        )
+    # class ComputeLossWrapper:
+    #     def __init__(self, embedding_orig, embedding_text_labels_norm, reduction='mean', loss=None,
+    #                 logit_scale=100.):
+    #         self.embedding_orig = embedding_orig
+    #         self.embedding_text_labels_norm = embedding_text_labels_norm
+    #         self.reduction = reduction
+    #         self.loss_str = loss
+    #         self.logit_scale = logit_scale
+
+    #     def __call__(self, embedding, targets):
+    #         return compute_loss(
+    #             loss_str=self.loss_str, embedding=embedding, targets=targets,
+    #             embedding_orig=self.embedding_orig, logit_scale=self.logit_scale,
+    #             embedding_text_labels_norm=self.embedding_text_labels_norm, reduction=self.reduction
+    #             )
+
+    # loss_inner_wrapper = ComputeLossWrapper(
+    #     embedding_orig, embedding_text_labels_norm=None,
+    #     reduction='none' if attack == 'apgd' else 'mean', loss=inner_loss,
+    #     logit_scale=100.
+    #     )
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     models_dict, transforms_dict = initialize_models(model_list,  post_process,next_to_last, is_train)
@@ -209,14 +226,14 @@ def infer(model_list,img_path_table,data_dir,batch_size,output_dir,post_process,
         with torch.no_grad(), torch.amp.autocast(device_type='cuda'):
             for batch, batch_id, targets in tqdm(dataloader, total=len(dataloader)):
                 if attack=='apgd':
-                    data_adv = apgd(
+                    batch = apgd(
                     model=model,
-                    loss_fn=loss_inner_wrapper,
-                    x=data,
+                    loss_fn=hinge_loss if inner_loss=='hinge' else raise NotImplemented,
+                    x=batch,
                     y=targets,
-                    norm=args.norm,
-                    eps=args.eps,
-                    n_iter=args.iterations_adv,
+                    norm='linf',
+                    eps=4,
+                    n_iter=args.iterations_adv,#FIX THIS
                     verbose=True
 
                 batch = batch.to(device)  # Move batch to GPU
@@ -231,7 +248,7 @@ def infer(model_list,img_path_table,data_dir,batch_size,output_dir,post_process,
         modelname_column = f'joint_model_{modelname}_epoch3'
         for ii, logit in zip(all_ids, all_image_features):
             final_table.loc[ii, modelname_column] = logit
-        final_table.to_csv('csvs_adv/nonrobust.csv', index=False)
+        final_table.to_csv('csvs_adv/nonrobust_hinge.csv', index=False)
 
 
 
