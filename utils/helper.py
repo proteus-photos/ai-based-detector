@@ -23,6 +23,23 @@ class TrainValDataset(Dataset):
         transformed_image = self.transforms_dict[self.modelname](image)
         return transformed_image, label
 
+class InferDataset(Dataset):
+    def __init__(self, img_path_table, data_dir, transform):
+        self.img_path_table = img_path_table
+        self.data_dir = data_dir
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.img_path_table)
+
+    def __getitem__(self, idx):
+        index = self.img_path_table.index[idx]
+        filepath = os.path.join(self.data_dir, self.img_path_table.loc[index, 'path'])
+        label = self.img_path_table.iloc[index]['label']
+        image = Image.open(filepath)
+        image = self.transform(image).to(device)
+        return image, index,label
+
 class LinearSVM(nn.Module):
     def __init__(self, in_features):
         super(LinearSVM, self).__init__()

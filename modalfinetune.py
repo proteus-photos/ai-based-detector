@@ -28,7 +28,8 @@ with finetune_image.imports():
     from torch.utils.data import DataLoader 
     from PIL import Image
     import os
-    from utils.helper import TrainValDataset, LinearSVM, initialize_models
+    from utils.helper import TrainValDataset, LinearSVM, initialize_models, InferDataset
+    from adversarial.attacks import apgd_train as apgd
 
 volume = modal.Volume.from_name("finetune-volume", create_if_missing=True)
 VOL_PATH = Path("/finetune_volume")
@@ -46,13 +47,14 @@ def parse_arguments():
     parser.add_argument('--epochs', type=int, default=10, help='number of epochs')
     parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
     parser.add_argument('--modelname', type=str, required=True, help='name of model')
-    parser.add_argument('--local-rank', type=int, default=0, help='local rank for distributed training')  # Add this
+    parser.add_argument('--inner_loss',type=str, default='ce',help='loss for generating adversarial examples')
+    parser.add_argument('--local-rank', type=int, default=0, help='local rank for distributed training') 
     return parser.parse_args()
 
 
 
 @app.function(image=finetune_image,secrets=[wandb_secret], volumes={VOL_PATH: volume}, gpu = "a100-80gb",timeout=24*60*60 )
-def finetune(model_list,img_path_table,data_dir,batch_size,device,output_dir,post_process,next_to_last,is_train,epochs=10, lr=1e-5):
+def finetune(model_list,img_path_table,data_dir,batch_size,output_dir,post_process,next_to_last,is_train,epochs=10, lr=1e-5):
 
     def joint_train_clip_svm(models_dict, img_path_table, transforms_dict, data_dir, batch_size, device, output_dir, epochs=10, lr=1e-5):
         data_dir = VOL_PATH / data_dir
@@ -126,10 +128,111 @@ def finetune(model_list,img_path_table,data_dir,batch_size,device,output_dir,pos
                     print(f"Checkpoint saved at {checkpoint_path}")
 
             wandb.finish()
-        
+    
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     models_dict, transforms_dict = initialize_models(model_list,  post_process,next_to_last, is_train)
     print(models_dict.keys())
     joint_train_clip_svm(models_dict, img_path_table, transforms_dict, data_dir, batch_size, device, output_dir, epochs, lr)
+
+
+
+@app.function(image=finetune_image,secrets=[wandb_secret], volumes={VOL_PATH: volume}, gpu = "a100-40gb",timeout=24*60*60 )
+def infer(model_list,img_path_table,data_dir,batch_size,output_dir,post_process,next_to_last,is_train,attack=None,inner_loss):
+
+    def ce(out, targets, reduction='mean'):
+        # out = logits
+        assert out.shape[0] == targets.shape[0], (out.shape, targets.shape)
+        assert out.shape[0] > 1
+
+        return F.cross_entropy(out, targets, reduction=reduction)
+
+    def hinge_loss(outputs, labels):
+        return torch.mean(torch.clamp(1 - outputs * labels, min=0))
+
+    class ComputeLossWrapper:
+        def __init__(self, embedding_orig, embedding_text_labels_norm, reduction='mean', loss=None,
+                    logit_scale=100.):
+            self.embedding_orig = embedding_orig
+            self.embedding_text_labels_norm = embedding_text_labels_norm
+            self.reduction = reduction
+            self.loss_str = loss
+            self.logit_scale = logit_scale
+
+        def __call__(self, embedding, targets):
+            return compute_loss(
+                loss_str=self.loss_str, embedding=embedding, targets=targets,
+                embedding_orig=self.embedding_orig, logit_scale=self.logit_scale,
+                embedding_text_labels_norm=self.embedding_text_labels_norm, reduction=self.reduction
+                )
+
+    loss_inner_wrapper = ComputeLossWrapper(
+        embedding_orig, embedding_text_labels_norm,
+        reduction='none' if attack == 'apgd' else 'mean', loss=args.inner_loss,
+        logit_scale=100.
+        )
+    
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    models_dict, transforms_dict = initialize_models(model_list,  post_process,next_to_last, is_train)
+    for modelname in models_dict.keys():
+        model = models_dict[modelname]
+        svm = LinearSVM(in_features=1280).to(device)
+        checkpoint_name =f'joint_model_{modelname}_epoch3.pth'
+        checkpoint = torch.load(os.path.join(output_dir,checkpoint_name), map_location=device)
+        model.load_state_dict(checkpoint['clip_model'])
+        svm.load_state_dict(checkpoint['svm_model'])
+        model.eval()
+        svm.eval()
+        all_image_features, all_ids = [], []
+        # batch, batch_id = [], []
+        last_index = img_path_table.index[-1]
+        # for index in tqdm(img_path_table.index, total=len(img_path_table)):
+        #     filepath = os.path.join(data_dir, img_path_table.loc[index, 'path'])
+        #     image = Image.open(filepath)
+        #     transformed_image = transforms_dict[modelname](image).to(device)
+        #     batch.append(transformed_image)
+        #     batch_id.append(index)
+
+        #     if len(batch) >= batch_size or index == last_index:
+        #         batch = torch.stack(batch, dim=0)
+        #         with torch.no_grad(), torch.amp.autocast(device_type='cuda'):
+        #             features = model.visual.forward(batch)
+        #             outputs = svm(features).squeeze().cpu()
+        #         all_image_features.extend(outputs.flatten())
+        #         all_ids.extend(batch_id)
+        dataset = ImageDataset(img_path_table, data_dir, transforms_dict[modelname])
+        dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=4, pin_memory=True)
+
+        # Initialize storage
+        all_image_features, all_ids = [], []
+
+        # Process batches
+        with torch.no_grad(), torch.amp.autocast(device_type='cuda'):
+            for batch, batch_id, targets in tqdm(dataloader, total=len(dataloader)):
+                if attack=='apgd':
+                    data_adv = apgd(
+                    model=model,
+                    loss_fn=loss_inner_wrapper,
+                    x=data,
+                    y=targets,
+                    norm=args.norm,
+                    eps=args.eps,
+                    n_iter=args.iterations_adv,
+                    verbose=True
+
+                batch = batch.to(device)  # Move batch to GPU
+                features = model.visual.forward(batch)
+                outputs = svm(features).squeeze().cpu()
+                all_image_features.extend(outputs.flatten())
+                all_ids.extend(batch_id.tolist())
+                # batch, batch_id = [], []
+
+        all_image_features = np.array(all_image_features)
+        
+        modelname_column = f'joint_model_{modelname}_epoch3'
+        for ii, logit in zip(all_ids, all_image_features):
+            final_table.loc[ii, modelname_column] = logit
+        final_table.to_csv('csvs_adv/nonrobust.csv', index=False)
+
 
 
 
@@ -138,7 +241,6 @@ def finetune(model_list,img_path_table,data_dir,batch_size,device,output_dir,pos
 def main():
     args = parse_arguments()
     set_random_seed()
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     data_df = prepare_data(args.data_dir)
     data_df['label'] = np.where(data_df['type'] == 'real', -1, 1)
     img_path_table = data_df[['path', 'label']]
@@ -154,12 +256,13 @@ def main():
     if args.train:
         with modal.enable_output():
             with app.run():
-                finetune.remote(filtered_list, img_path_table, args.data_dir, args.batch_size, device, args.weight_dir,args.postprocess,args.next_to_last,args.train, args.epochs, args.lr)
+                finetune.remote(filtered_list, img_path_table, args.data_dir, args.batch_size, args.weight_dir,args.postprocess,args.next_to_last,args.train, args.epochs, args.lr)
                 # finetune_ddp.remote(0,3,filtered_list, img_path_table, args.data_dir, args.batch_size, args.weight_dir,args.postprocess,args.next_to_last,args.train, args.epochs, args.lr)
 
     elif args.infer:
         with modal.enable_output():
             with app.run():
+                infer.remote(filtered_list, img_path_table, args.data_dir, args.batch_size, args.weight_dir,args.postprocess,args.next_to_last,args.train, args.attack, args.inner_loss)
 
     
 if __name__ == "__main__":
