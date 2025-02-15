@@ -1,8 +1,8 @@
 import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
 import torch
-__all__ = ["ResNet", "resnet18", "resnet34",
-           "resnet50", "resnet101", "resnet152"]
+
+__all__ = ["ResNet", "resnet18", "resnet34", "resnet50", "resnet101", "resnet152"]
 
 
 model_urls = {
@@ -16,7 +16,9 @@ model_urls = {
 
 def conv3x3(in_planes, out_planes, stride=1):
     """3x3 convolution with padding"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False)
+    return nn.Conv2d(
+        in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False
+    )
 
 
 def conv1x1(in_planes, out_planes, stride=1):
@@ -98,8 +100,7 @@ class ResNet(nn.Module):
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False):
         super().__init__()
         self.inplanes = 64
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7,
-                               stride=2, padding=3, bias=False)
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
@@ -112,8 +113,7 @@ class ResNet(nn.Module):
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(
-                    m.weight, mode="fan_out", nonlinearity="relu")
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
@@ -214,6 +214,6 @@ def resnet152(pretrained=False, **kwargs):
     return model
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     net = resnet50(pretrained=True)
     print(net)

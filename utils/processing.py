@@ -14,30 +14,34 @@ import torchvision.transforms.functional as TF
 from PIL import Image
 import pandas as pd
 
+
 def prepare_data(data_dir):
-    '''
+    """
     Input:
     takes in a directory containing 2 subdirectories 'real' and 'ai-gen'
     each of them contain further directories with named source of images
     Output:
     Returns a dataframe with 3 coulumns i.e. path , source, type
-    '''
+    """
     data = []
     for tdir in os.listdir(data_dir):
-        type_dir= os.path.join(data_dir,tdir)
+        type_dir = os.path.join(data_dir, tdir)
         if not os.path.isdir(type_dir):  # Skip if not a directory
             continue
         for sdir in os.listdir(type_dir):
-            source_dir = os.path.join(type_dir,sdir)
+            source_dir = os.path.join(type_dir, sdir)
             if not os.path.isdir(source_dir):  # Skip if not a directory
                 continue
-            img_list = [img for img in os.listdir(source_dir) if img.endswith(('.png' , 'jpg')) ]
-            img_path_list = [os.path.join(tdir,sdir,name) for name in img_list]
+            img_list = [
+                img for img in os.listdir(source_dir) if img.endswith((".png", "jpg"))
+            ]
+            img_path_list = [os.path.join(tdir, sdir, name) for name in img_list]
             for path in img_path_list:
-                data.append({'path':path,'source':sdir,'type':tdir})
+                data.append({"path": path, "source": sdir, "type": tdir})
     df = pd.DataFrame(data)
     return df
-    
+
+
 def make_processing(opt):
     # make precessing transform
     # input: an argparse.Namespace
@@ -282,8 +286,11 @@ def make_aug(opt):
     else:
         return None
 
+
 def make_normalize(norm_type):
-    transforms_list = list() # this type of initialization is done to make the code more readable
+    transforms_list = (
+        list()
+    )  # this type of initialization is done to make the code more readable
 
     if norm_type == "resnet":
         print("normalize RESNET")
@@ -333,11 +340,22 @@ def make_normalize(norm_type):
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         )
         from torch.nn.functional import interpolate
+
         transforms_list.append(
-            lambda x: x[..., :(x.shape[-2]//2*2), :(x.shape[-1]//2*2)]
+            lambda x: x[..., : (x.shape[-2] // 2 * 2), : (x.shape[-1] // 2 * 2)]
         )
         transforms_list.append(
-            lambda x: (x - interpolate(x[None,...,::2,::2], scale_factor=2.0, mode='nearest', recompute_scale_factor=True)[0])*2.0/3.0
+            lambda x: (
+                x
+                - interpolate(
+                    x[None, ..., ::2, ::2],
+                    scale_factor=2.0,
+                    mode="nearest",
+                    recompute_scale_factor=True,
+                )[0]
+            )
+            * 2.0
+            / 3.0
         )
     elif norm_type == "cooc":
         print("normalize COOC")
@@ -375,6 +393,7 @@ def sample_continuous(s):
 
 def data_augment_blur(img, p, blur_sig):
     from scipy.ndimage.filters import gaussian_filter
+
     if random.random() < p:
         img = np.array(img)
         sig = sample_continuous(blur_sig)
@@ -426,7 +445,6 @@ def data_augment_D4(img, p):
     return img
 
 
-
 def create_noise_transforms(p, var_limit=(10.0, 50.0)):
     from albumentations.augmentations.transforms import GaussNoise
 
@@ -456,6 +474,7 @@ def create_cutout_transforms(p):
 
 def cv2_webp(img, compress_val):
     import cv2
+
     img_cv2 = img[:, :, ::-1]
     encode_param = [int(cv2.IMWRITE_WEBP_QUALITY), compress_val]
     result, encimg = cv2.imencode(".webp", img_cv2, encode_param)
@@ -476,6 +495,7 @@ def pil_webp(img, compress_val):
 
 def cv2_jpg(img, compress_val):
     import cv2
+
     img_cv2 = img[:, :, ::-1]
     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), compress_val]
     result, encimg = cv2.imencode(".jpg", img_cv2, encode_param)
@@ -636,7 +656,8 @@ class CenterCropPad:
         return img.crop(
             (crop_left, crop_top, crop_left + crop_width, crop_top + crop_height)
         )
- 
+
+
 class RandomSizeCrop:
     def __init__(self, min_scale=0.625, max_scale=1.0):
         self.min_scale = min_scale
@@ -647,7 +668,7 @@ class RandomSizeCrop:
         scale = random.uniform(self.min_scale, self.max_scale)
         new_width = int(width * scale)
         new_height = int(height * scale)
-        
+
         # Ensure that the crop size is at least 1x1
         new_width = max(1, new_width)
         new_height = max(1, new_height)
@@ -657,21 +678,23 @@ class RandomSizeCrop:
 
         return TF.crop(img, j, i, new_height, new_width)
 
+
 def rand_jpeg_compression(image):
     # Random quality factor between 65 and 100
     quality = random.randint(85, 100)
-    
+
     # Save the image to an in-memory buffer with the selected quality
     buffer = BytesIO()
-    if image.mode == 'RGBA':
-        image = image.convert('RGB')
+    if image.mode == "RGBA":
+        image = image.convert("RGB")
     image.save(buffer, format="JPEG", quality=quality)
-    
+
     # Load the compressed image back from the buffer
     buffer.seek(0)
     compressed_image = Image.open(buffer)
-    
+
     return compressed_image
+
 
 def set_random_seed(seed=317):
     random.seed(seed)

@@ -17,6 +17,7 @@ model_urls = {
     "resnet152": "https://download.pytorch.org/models/resnet152-b121ed2d.pth",
 }
 
+
 class ChannelLinear(nn.Linear):
     def __init__(
         self, in_features: int, out_features: int, bias: bool = True, pool=None
@@ -128,6 +129,7 @@ class Bottleneck(nn.Module):
         out = self.relu(out)
 
         return out
+
 
 class ResNet(nn.Module):
     def __init__(

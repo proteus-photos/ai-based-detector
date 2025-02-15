@@ -1,4 +1,4 @@
-from torch.utils.data import Dataset 
+from torch.utils.data import Dataset
 import torch.nn as nn
 import torch
 from torchvision.transforms import Compose, Resize, InterpolationMode
@@ -19,11 +19,12 @@ class TrainValDataset(Dataset):
         return len(self.img_path_table)
 
     def __getitem__(self, index):
-        filepath = os.path.join(self.data_dir, self.img_path_table.iloc[index]['path'])
-        label = self.img_path_table.iloc[index]['label']
+        filepath = os.path.join(self.data_dir, self.img_path_table.iloc[index]["path"])
+        label = self.img_path_table.iloc[index]["label"]
         image = Image.open(filepath)
         transformed_image = self.transforms_dict[self.modelname](image)
         return transformed_image, label
+
 
 class InferDataset(Dataset):
     def __init__(self, img_path_table, data_dir, transform):
@@ -36,11 +37,12 @@ class InferDataset(Dataset):
 
     def __getitem__(self, idx):
         index = self.img_path_table.index[idx]
-        filepath = os.path.join(self.data_dir, self.img_path_table.loc[index, 'path'])
-        label = self.img_path_table.iloc[index]['label']
+        filepath = os.path.join(self.data_dir, self.img_path_table.loc[index, "path"])
+        label = self.img_path_table.iloc[index]["label"]
         image = Image.open(filepath)
         image = self.transform(image)
-        return image, index,label
+        return image, index, label
+
 
 class LinearSVM(nn.Module):
     def __init__(self, in_features):
@@ -53,6 +55,7 @@ class LinearSVM(nn.Module):
     def hinge_loss(self, outputs, labels):
         return torch.mean(torch.clamp(1 - outputs * labels, min=0))
 
+
 def initialize_models(model_list, post_process, next_to_last):
     print("INITIALISING")
     models_dict = {}
@@ -60,11 +63,17 @@ def initialize_models(model_list, post_process, next_to_last):
     for modelname, dataset in model_list:
         transform = []
         if post_process:
-            transform += [RandomSizeCrop(min_scale=0.625, max_scale=1.0), Resize((200, 200), interpolation=InterpolationMode.BICUBIC), rand_jpeg_compression]
-        model, _, preprocess = open_clip.create_model_and_transforms(modelname, pretrained=dataset)
+            transform += [
+                RandomSizeCrop(min_scale=0.625, max_scale=1.0),
+                Resize((200, 200), interpolation=InterpolationMode.BICUBIC),
+                rand_jpeg_compression,
+            ]
+        model, _, preprocess = open_clip.create_model_and_transforms(
+            modelname, pretrained=dataset
+        )
         if next_to_last:
             model.visual.proj = None
-            #model.visual.head = None
+            # model.visual.head = None
         models_dict[modelname] = model
         transforms_dict[modelname] = Compose(transform + [preprocess])
-    return models_dict, transforms_dict  
+    return models_dict, transforms_dict
