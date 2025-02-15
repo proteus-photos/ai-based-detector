@@ -128,7 +128,7 @@ def apgd_train(model, x, y, norm, eps, n_iter=10, use_rs=False, loss_fn=None,
     print(model.training)
     assert not model.training
     norm = norm.replace('linf', 'Linf').replace('l2', 'L2')
-    device = x.device
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     ndims = len(x.shape) - 1
 
     if not use_rs:
@@ -143,13 +143,8 @@ def apgd_train(model, x, y, norm, eps, n_iter=10, use_rs=False, loss_fn=None,
     x_best_adv = x_adv.clone()
     loss_steps = torch.zeros([n_iter, x.shape[0]], device=device)
     loss_best_steps = torch.zeros([n_iter + 1, x.shape[0]], device=device)
-    acc_steps = torch.zeros_like(loss_best_steps)
+    # acc_steps = torch.zeros_like(loss_best_steps)  # Commented out
 
-    # set loss
-    # criterion_indiv = criterion_dict[loss]
-
-
-    # set params
     n_fts = math.prod(x.shape[1:])
     if norm in ['Linf', 'L2']:
         n_iter_2 = max(int(0.22 * n_iter), 1)
@@ -173,27 +168,22 @@ def apgd_train(model, x, y, norm, eps, n_iter=10, use_rs=False, loss_fn=None,
     step_size = alpha * eps * torch.ones(
         [x.shape[0], *[1] * ndims],
         device=device
-        )
+    )
     counter3 = 0
 
     x_adv.requires_grad_()
-    # grad = torch.zeros_like(x)
-    # for _ in range(self.eot_iter)
-    # with torch.enable_grad()
-    logits = F.normalize(model(x_adv), dim =-1)
-    loss_indiv = loss_fn(logits, y)
-    loss = loss_indiv.sum()
-    # grad += torch.autograd.grad(loss, [x_adv])[0].detach()
+    logits = F.normalize(model(x_adv), dim=-1)
+    loss_indiv = loss_fn(logits, y).to(device)
+    loss = loss_indiv.sum().to(device)
     grad = torch.autograd.grad(loss, [x_adv])[0].detach()
-    # grad /= float(self.eot_iter)
     grad_best = grad.clone()
     x_adv.detach_()
     loss_indiv.detach_()
     loss.detach_()
 
-    print(logits.detach())
-    acc = logits.detach().max(1)[1] == y
-    acc_steps[0] = acc + 0
+    # print(logits.detach())
+    # acc = logits.detach().max(1)[1] == y  # Commented out
+    # acc_steps[0] = acc + 0  # Commented out
     loss_best = loss_indiv.detach().clone()
     loss_best_last_check = loss_best.clone()
     reduced_last_check = torch.ones_like(loss_best)
@@ -203,177 +193,97 @@ def apgd_train(model, x, y, norm, eps, n_iter=10, use_rs=False, loss_fn=None,
     x_adv_old = x_adv.clone().detach()
 
     for i in range(n_iter):
-        ### gradient step
-        if True:  # with torch.no_grad()
-            x_adv = x_adv.detach()
-            grad2 = x_adv - x_adv_old
-            x_adv_old = x_adv.clone()
-            loss_curr = loss.detach().mean()
+        x_adv = x_adv.detach()
+        grad2 = x_adv - x_adv_old
+        x_adv_old = x_adv.clone()
+        loss_curr = loss.detach().mean()
 
-            a = 0.75 if i > 0 else 1.0
+        a = 0.75 if i > 0 else 1.0
 
-            if norm == 'Linf':
-                x_adv_1 = x_adv + step_size * torch.sign(grad)
-                x_adv_1 = torch.clamp(
-                    torch.min(
-                        torch.max(
-                            x_adv_1,
-                            x - eps
-                            ), x + eps
-                        ), 0.0, 1.0
-                    )
-                x_adv_1 = torch.clamp(
-                    torch.min(
-                        torch.max(
-                            x_adv + (x_adv_1 - x_adv) * a + grad2 * (1 - a),
-                            x - eps
-                        ), x + eps
-                    ), 0.0, 1.0
-                )
+        if norm == 'Linf':
+            x_adv_1 = x_adv + step_size * torch.sign(grad)
+            x_adv_1 = torch.clamp(
+                torch.min(
+                    torch.max(x_adv_1, x - eps), x + eps
+                ), 0.0, 1.0
+            )
+            x_adv_1 = torch.clamp(
+                torch.min(
+                    torch.max(x_adv + (x_adv_1 - x_adv) * a + grad2 * (1 - a), x - eps), x + eps
+                ), 0.0, 1.0
+            )
+        
+        x_adv = x_adv_1 + 0.
 
-            elif norm == 'L2':
-                x_adv_1 = x_adv + step_size * grad / (L2_norm(
-                    grad,
-                    keepdim=True
-                    ) + 1e-12)
-                x_adv_1 = torch.clamp(
-                    x + (x_adv_1 - x) / (L2_norm(
-                        x_adv_1 - x,
-                        keepdim=True
-                        ) + 1e-12) * torch.min(
-                        eps * torch.ones_like(x),
-                        L2_norm(x_adv_1 - x, keepdim=True)
-                        ), 0.0, 1.0
-                    )
-                x_adv_1 = x_adv + (x_adv_1 - x_adv) * a + grad2 * (1 - a)
-                x_adv_1 = torch.clamp(
-                    x + (x_adv_1 - x) / (L2_norm(
-                        x_adv_1 - x,
-                        keepdim=True
-                        ) + 1e-12) * torch.min(
-                        eps * torch.ones_like(x),
-                        L2_norm(x_adv_1 - x, keepdim=True)
-                        ), 0.0, 1.0
-                    )
-
-            elif norm == 'L1':
-                grad_topk = grad.abs().view(x.shape[0], -1).sort(-1)[0]
-                topk_curr = torch.clamp((1. - topk) * n_fts, min=0, max=n_fts - 1).long()
-                grad_topk = grad_topk[u, topk_curr].view(-1, *[1] * (len(x.shape) - 1))
-                sparsegrad = grad * (grad.abs() >= grad_topk).float()
-                x_adv_1 = x_adv + step_size * sparsegrad.sign() / (
-                        sparsegrad.sign().abs().view(x.shape[0], -1).sum(dim=-1).view(
-                            -1, 1, 1, 1
-                        ) + 1e-10)
-
-                delta_u = x_adv_1 - x
-                delta_p = L1_projection(x, delta_u, eps)
-                x_adv_1 = x + delta_u + delta_p
-
-            elif norm == 'L0':
-                L1normgrad = grad / (grad.abs().view(grad.shape[0], -1).sum(
-                    dim=-1, keepdim=True
-                ) + 1e-12).view(
-                    grad.shape[0], *[1] * (
-                            len(grad.shape) - 1)
-                    )
-                x_adv_1 = x_adv + step_size * L1normgrad * n_fts
-                x_adv_1 = L0_projection(x_adv_1, x, eps)
-                # TODO: add momentum
-
-            x_adv = x_adv_1 + 0.
-
-        ### get gradient
         x_adv.requires_grad_()
-        # grad = torch.zeros_like(x)
-        # for _ in range(self.eot_iter)
-        # with torch.enable_grad()
-        logits = model(x_adv, output_normalize=True)
+        logits = F.normalize(model(x_adv), dim=-1)
         loss_indiv = loss_fn(logits, y)
         loss = loss_indiv.sum()
 
-        # grad += torch.autograd.grad(loss, [x_adv])[0].detach()
         if i < n_iter - 1:
-            # save one backward pass
             grad = torch.autograd.grad(loss, [x_adv])[0].detach()
-        # grad /= float(self.eot_iter)
         x_adv.detach_()
         loss_indiv.detach_()
         loss.detach_()
 
-        pred = logits.detach().max(1)[1] == y
-        acc = torch.min(acc, pred)
-        acc_steps[i + 1] = acc + 0
-        ind_pred = (pred == 0).nonzero().squeeze()
+        # pred = logits.detach().max(1)[1] == y  # Commented out
+        # acc = torch.min(acc, pred)  # Commented out
+        # acc_steps[i + 1] = acc + 0  # Commented out
+        logits_bin = torch.sign(logits.detach())
+        logits_bin[logits_bin==0]=1
+        ind_pred = (logits_bin == y).nonzero().squeeze()
         x_best_adv[ind_pred] = x_adv[ind_pred] + 0.
+        
         if verbose:
-            str_stats = ' - step size: {:.5f} - topk: {:.2f}'.format(
-                step_size.mean(), topk.mean() * n_fts
-            ) if norm in ['L1'] else ' - step size: {:.5f}'.format(
-                step_size.mean()
-            )
             print(
-                'iteration: {} - best loss: {:.6f} curr loss {:.6f} - robust accuracy: {:.2%}{}'.format(
-                    i, loss_best.sum(), loss_curr, acc.float().mean(), str_stats
+                'iteration: {} - best loss: {:.6f} curr loss {:.6f}'.format(
+                    i, loss_best.sum(), loss_curr
                 )
             )
-            # print('pert {}'.format((x - x_best_adv).abs().view(x.shape[0], -1).sum(-1).max()))
 
-        ### check step size
-        if True:  # with torch.no_grad()
-            y1 = loss_indiv.detach().clone()
-            loss_steps[i] = y1 + 0
-            ind = (y1 > loss_best).nonzero().squeeze()
-            x_best[ind] = x_adv[ind].clone()
-            grad_best[ind] = grad[ind].clone()
-            loss_best[ind] = y1[ind] + 0
-            loss_best_steps[i + 1] = loss_best + 0
+        y1 = loss_indiv.detach().clone().to(device)
+        loss_steps[i] = y1 + 0
+        ind = (y1 > loss_best).nonzero().squeeze()
 
-            counter3 += 1
 
-            if counter3 == k:
-                if norm in ['Linf', 'L2']:
-                    fl_oscillation = check_oscillation(
-                        loss_steps, i, k,
-                        loss_best, k3=thr_decr
-                        )
-                    fl_reduce_no_impr = (1. - reduced_last_check) * (
-                            loss_best_last_check >= loss_best).float()
-                    fl_oscillation = torch.max(
-                        fl_oscillation,
-                        fl_reduce_no_impr
-                        )
-                    reduced_last_check = fl_oscillation.clone()
-                    loss_best_last_check = loss_best.clone()
+        x_best[ind] = x_adv[ind].clone()
+        grad_best[ind] = grad[ind].clone()
+        loss_best[ind] = y1[ind] + 0
+        loss_best_steps[i + 1] = loss_best + 0
 
-                    if fl_oscillation.sum() > 0:
-                        ind_fl_osc = (fl_oscillation > 0).nonzero().squeeze()
-                        step_size[ind_fl_osc] /= 2.0
-                        n_reduced = fl_oscillation.sum()
+        counter3 += 1
 
-                        x_adv[ind_fl_osc] = x_best[ind_fl_osc].clone()
-                        grad[ind_fl_osc] = grad_best[ind_fl_osc].clone()
+        if counter3 == k:
+            if norm in ['Linf', 'L2']:
+                loss_steps = loss_steps.to(device)
+                loss_best = loss_best.to(device)
 
-                    counter3 = 0
-                    k = max(k - size_decr, n_iter_min)
+                fl_oscillation = check_oscillation(loss_steps, i, k, loss_best, k3=thr_decr).to(device)
+                fl_reduce_no_impr = (1. - reduced_last_check.to(device)) * (loss_best_last_check.to(device) >= loss_best).float()
+                fl_oscillation = torch.max(fl_oscillation, fl_reduce_no_impr)
 
-                elif norm == 'L1':
-                    # adjust sparsity
-                    sp_curr = L0_norm(x_best - x)
-                    fl_redtopk = (sp_curr / sp_old) < .95
-                    topk = sp_curr / n_fts / 1.5
-                    step_size[fl_redtopk] = alpha * eps
-                    step_size[~fl_redtopk] /= adasp_redstep
-                    step_size.clamp_(alpha * eps / adasp_minstep, alpha * eps)
-                    sp_old = sp_curr.clone()
+                reduced_last_check = fl_oscillation.clone().to(device)
+                loss_best_last_check = loss_best.clone().to(device)
 
-                    x_adv[fl_redtopk] = x_best[fl_redtopk].clone()
-                    grad[fl_redtopk] = grad_best[fl_redtopk].clone()
+                if fl_oscillation.sum() > 0:
+                    ind_fl_osc = (fl_oscillation > 0).nonzero(as_tuple=False).squeeze().to(device)
 
-                    counter3 = 0
+                    step_size = step_size.to(device)
+                    step_size[ind_fl_osc] /= 2.0
+                    n_reduced = fl_oscillation.sum()
 
-    #return x_best, acc, loss_best, x_best_adv
+                    x_adv = x_adv.to(device)
+                    x_best = x_best.to(device)
+                    grad_best = grad_best.to(device)
+
+                    x_adv[ind_fl_osc] = x_best[ind_fl_osc].clone()
+                    grad[ind_fl_osc] = grad_best[ind_fl_osc].clone()
+
+                counter3 = 0
+                k = max(k - size_decr, n_iter_min)
+
     return x_best_adv
+
 
 
 def pgd(
@@ -440,5 +350,4 @@ def pgd(
     # todo return best perturbation
     # problem is that model currently does not output expanded loss
     return data_clean + perturbation.detach()
-
 

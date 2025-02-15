@@ -53,7 +53,7 @@ class LinearSVM(nn.Module):
     def hinge_loss(self, outputs, labels):
         return torch.mean(torch.clamp(1 - outputs * labels, min=0))
 
-def initialize_models(model_list, post_process, next_to_last, is_train):
+def initialize_models(model_list, post_process, next_to_last):
     print("INITIALISING")
     models_dict = {}
     transforms_dict = {}
@@ -61,10 +61,7 @@ def initialize_models(model_list, post_process, next_to_last, is_train):
         transform = []
         if post_process:
             transform += [RandomSizeCrop(min_scale=0.625, max_scale=1.0), Resize((200, 200), interpolation=InterpolationMode.BICUBIC), rand_jpeg_compression]
-        if is_train:#Load pretrained model for finetuning !    
-            model, _, preprocess = open_clip.create_model_and_transforms(modelname, pretrained=dataset)
-        else:#Load random weights initially;later load checkpoints
-            model, _, preprocess = open_clip.create_model_and_transforms(modelname, pretrained=None)
+        model, _, preprocess = open_clip.create_model_and_transforms(modelname, pretrained=dataset)
         if next_to_last:
             model.visual.proj = None
             #model.visual.head = None

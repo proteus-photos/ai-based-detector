@@ -7,3 +7,4 @@
 *.sh
 **/*.pkl
 wandb
+weights/

@@ -21,6 +21,7 @@ def parse_arguments():
     parser.add_argument('--weight_dir', type=str, default='weights', help='directory to store weights of trained models.')
     parser.add_argument('--train', action='store_true', help='Used to train the model')
     parser.add_argument('--infer', action='store_true', help='Used to run inference')
+    parser.add_argument('--val', action='store_true', help='Used to run validation')
     parser.add_argument('--postprocess', action='store_true', help='Whether to postprocess images or not')
     parser.add_argument('--next_to_last', action='store_true', help='Whether to take features from next to last layer or not.')
     parser.add_argument('--epochs', type=int, default=10, help='number of epochs')
@@ -102,14 +103,14 @@ def joint_train_clip_svm(models_dict, img_path_table, transforms_dict, data_dir,
 
 def validate_checkpoints(models_dict,img_path_table, transforms_dict, data_dir, batch_size, device,checkpoint_dir,epochs=5):
     for modelname in models_dict.keys():
-        wandb.init(project="clip-svm-validation-modal", config={"batch_size": batch_size, "epochs": epochs,},name=modelname, id ='rrhcmcew',resume='must')
+        wandb.init(project="clip-svm-validation-adv", config={"batch_size": batch_size, "epochs": epochs,},name=modelname+'_15000')
         model = models_dict[modelname]
         valdataset = TrainValDataset(img_path_table, transforms_dict, modelname, data_dir)
         valdataloader = DataLoader(valdataset, batch_size=batch_size, shuffle=False)
         # in_features =  model.visual.ln_post.normalized_shape[0]
         svm = LinearSVM(in_features=1280).to(device)
-        for epoch in range(24,epochs):
-            checkpoint_name =f'joint_model_{modelname}_epoch{epoch+1}.pth'
+        for epoch in range(epochs):
+            checkpoint_name =f'joint_model_{modelname}_adv15000_epoch{epoch+1}.pth'
             checkpoint = torch.load(os.path.join(checkpoint_dir,checkpoint_name), map_location=device)
             model.load_state_dict(checkpoint['clip_model'])
             svm.load_state_dict(checkpoint['svm_model'])
@@ -141,7 +142,7 @@ def infer(model_list,img_path_table,data_dir,batch_size,output_dir,post_process,
         return torch.mean(torch.clamp(1 - outputs * labels, min=0))
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    models_dict, transforms_dict = initialize_models(model_list,  post_process,next_to_last, is_train)
+    models_dict, transforms_dict = initialize_models(model_list, post_process, next_to_last)
     for modelname in models_dict.keys():
         model = models_dict[modelname].to(device)
         svm = LinearSVM(in_features=1280).to(device)
@@ -174,7 +175,9 @@ def infer(model_list,img_path_table,data_dir,batch_size,output_dir,post_process,
         
         for batch, batch_id, targets in tqdm(dataloader, total=len(dataloader)):
             batch = batch.to(device)
-
+            print('BATCH')
+            print(batch.shape)
+            print(targets.shape)
             if attack=='apgd':
                 batch = apgd(
                 model=full_model,
@@ -224,7 +227,7 @@ def main():
         joint_train_clip_svm(models_dict, img_path_table, transforms_dict, args.data_dir, args.batch_size, device, args.weight_dir, args.epochs, args.lr)
     elif args.infer:
         infer(filtered_list, img_path_table, args.data_dir, args.batch_size, args.weight_dir,args.postprocess,args.next_to_last,args.train, args.inner_loss, args.attack)
-    else:
+    elif args.val:
         validate_checkpoints(models_dict,img_path_table, transforms_dict,  args.data_dir, args.batch_size,  device, args.weight_dir, args.epochs)
         
 if __name__ == "__main__":
