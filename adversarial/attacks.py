@@ -235,6 +235,7 @@ def apgd_train(
         x_adv.requires_grad_()
         logits = F.normalize(model(x_adv), dim=-1)
         loss_indiv = loss_fn(logits, y)
+
         loss = loss_indiv.sum()
 
         if i < n_iter - 1:

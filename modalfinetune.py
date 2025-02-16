@@ -28,9 +28,16 @@ with finetune_image.imports():
     from torch.utils.data import DataLoader
     from PIL import Image
     import os
-    from utils.helper import TrainValDataset, LinearSVM, initialize_models, InferDataset
+    from utils.helper import (
+        TrainValDataset,
+        LinearSVM,
+        initialize_models,
+        InferDataset,
+        FullModel,
+    )
     from adversarial.attacks import apgd_train as apgd
     from utils.processing import set_random_seed, prepare_data
+    from utils.losses import ce, hinge_loss
 
 # Setup volumes for MODAL
 volume = modal.Volume.from_name("finetune-volume", create_if_missing=True)
@@ -66,6 +73,12 @@ def parse_arguments():
         help="Used to evaluate on adversarial examples",
     )
     parser.add_argument(
+        "--iterations_adv",
+        type=int,
+        default=10,
+        help="Iterations for adversarial attack",
+    )
+    parser.add_argument(
         "--postprocess",
         action="store_true",
         help="Whether to postprocess images or not",
@@ -85,6 +98,12 @@ def parse_arguments():
         help="loss for generating adversarial examples",
     )
     parser.add_argument(
+        "--csv_path",
+        type=str,
+        default="out.csv",
+        help="Path for output logits during inference",
+    )
+    parser.add_argument(
         "--local-rank", type=int, default=0, help="local rank for distributed training"
     )
     return parser.parse_args()
@@ -97,14 +116,13 @@ def parse_arguments():
     gpu="a100-40gb",
     timeout=24 * 60 * 60,
 )
-def finetune(
+def train(
     model_list,
     data_dir,
     batch_size,
     output_dir,
     post_process,
     next_to_last,
-    is_train,
     epochs=10,
     lr=1e-5,
 ):
@@ -129,8 +147,15 @@ def finetune(
             img_path_table, transforms_dict, modelname, data_dir
         )
         traindataloader = DataLoader(traindataset, batch_size=batch_size, shuffle=True)
+
         # Initialize Linear SVM (instead of scikit-learn)
-        svm = LinearSVM(in_features=1280)
+        # Custom logic for only models listed in model_list. Change to add more models
+        if modelname.startswith("ViT-SO400M"):
+            svm = LinearSVM(in_features=1152)
+        elif modelname.startswith("ViT-H"):
+            svm = LinearSVM(in_features=1280)
+        else:
+            print("Model Not Supported")
 
         # Use optimizer to update both CLIP and SVM
         optimizer = optim.Adam(
@@ -148,10 +173,13 @@ def finetune(
             output_dir
             / "ViT-H-14-quickgelu_dfn5b_imagenet_l2_imagenet_FARE4_ZlXOM/checkpoints/step_15000.pt"
         )
+
+        # Uncooment to load checkpoint in the format saved in this file
         # model.load_state_dict(checkpoint['clip_model'])
         # svm.load_state_dict(checkpoint['svm_model'])
         # optimizer.load_state_dict(checkpoint['optimizer'])
-        #########
+
+        # Uncomment for loading visual backbone checkpoint from adversarial training
         checkpoint.pop("proj", None)
         model.visual.load_state_dict(checkpoint)
 
@@ -209,7 +237,7 @@ def finetune(
     image=finetune_image,
     secrets=[wandb_secret],
     volumes={VOL_PATH: volume, OUT_PATH: out_volume},
-    gpu="a100-40gb",
+    gpu="a100-80gb",
     timeout=24 * 60 * 60,
 )
 def infer(
@@ -221,22 +249,15 @@ def infer(
     next_to_last,
     is_train,
     inner_loss,
+    csv_path,
     attack=None,
+    iterations_adv=10,
 ):
     print(os.listdir(VOL_PATH / "data"))
     data_dir = VOL_PATH / data_dir
     data_df = prepare_data(data_dir)
     data_df["label"] = np.where(data_df["type"] == "real", -1, 1)
     img_path_table = data_df[["path", "label"]]
-
-    def ce(out, targets, reduction="mean"):
-        # out = logits
-        assert out.shape[0] == targets.shape[0], (out.shape, targets.shape)
-        assert out.shape[0] > 1
-        return F.cross_entropy(out, targets, reduction=reduction)
-
-    def hinge_loss(outputs, labels):
-        return torch.clamp(1 - outputs * labels, min=0)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     models_dict, transforms_dict = initialize_models(
@@ -245,7 +266,7 @@ def infer(
     for modelname in models_dict.keys():
         model = models_dict[modelname].to(device)
         svm = LinearSVM(in_features=1280).to(device)
-        checkpoint_name = f"joint_model_{modelname}_adv15000_epoch4.pth"
+        checkpoint_name = f"joint_model_{modelname}_epoch3.pth"
         checkpoint = torch.load(
             os.path.join(output_dir, checkpoint_name), map_location=device
         )
@@ -261,32 +282,26 @@ def infer(
 
         # Initialize storage
         all_image_features, all_ids = [], []
-
-        class FullModel(nn.Module):
-            def __init__(self, feature_extractor, classifier):
-                super().__init__()
-                self.feature_extractor = feature_extractor  # model.visual
-                self.classifier = classifier  # svm
-
-            def forward(self, x):
-                features = self.feature_extractor(x)  # Extract features
-                outputs = self.classifier(features).squeeze().cpu()  # Apply SVM
-                return outputs
-
         full_model = FullModel(model.visual, svm).eval()
 
         # Process batches
         for batch, batch_id, targets in tqdm(dataloader, total=len(dataloader)):
             batch = batch.to(device)
+            target_for_attack = targets.clone()
+            if inner_loss == "hinge":
+                loss_fn = hinge_loss
+            elif inner_loss == "ce":
+                target_for_attack = (target_for_attack + 1) // 2
+                loss_fn = ce
             if attack == "apgd":
                 batch = apgd(
                     model=full_model,
-                    loss_fn=hinge_loss,
+                    loss_fn=loss_fn,
                     x=batch,
-                    y=targets,
+                    y=target_for_attack,
                     norm="linf",
                     eps=4,
-                    n_iter=100,
+                    n_iter=iterations_adv,
                     verbose=True,
                 )
 
@@ -302,7 +317,7 @@ def infer(
         final_table = img_path_table[["path"]]
         for ii, logit in zip(all_ids, all_image_features):
             final_table.loc[ii, modelname_column] = logit
-        output_path = OUT_PATH / "csvs_adv/robust15000_none.csv"
+        output_path = OUT_PATH / csv_path
         output_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
         final_table.to_csv(output_path, index=False)
 
@@ -381,18 +396,16 @@ def main():
         ("ViT-H-14-378-quickgelu", "dfn5b"),
     ]
     filtered_list = [item for item in model_list if item[0] == args.modelname]
-    print(args.train)
     if args.train:
         with modal.enable_output():
             with app.run(detach=True):
-                finetune.remote(
+                train.remote(
                     filtered_list,
                     args.data_dir,
                     args.batch_size,
                     args.weight_dir,
                     args.postprocess,
                     args.next_to_last,
-                    args.train,
                     args.epochs,
                     args.lr,
                 )
@@ -409,7 +422,9 @@ def main():
                     args.next_to_last,
                     args.train,
                     args.inner_loss,
+                    args.csv_path,
                     args.attack,
+                    args.iterations_adv,
                 )
 
     elif args.val:

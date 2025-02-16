@@ -77,3 +77,15 @@ def initialize_models(model_list, post_process, next_to_last):
         models_dict[modelname] = model
         transforms_dict[modelname] = Compose(transform + [preprocess])
     return models_dict, transforms_dict
+
+
+class FullModel(nn.Module):
+    def __init__(self, feature_extractor, classifier):
+        super().__init__()
+        self.feature_extractor = feature_extractor  # model.visual
+        self.classifier = classifier  # svm
+
+    def forward(self, x):
+        features = self.feature_extractor(x)  # Extract features
+        outputs = self.classifier(features).squeeze().cpu()  # Apply SVM
+        return outputs

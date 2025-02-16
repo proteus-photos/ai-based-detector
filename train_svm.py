@@ -321,11 +321,10 @@ def main():
     img_path_table = data_df[["path", "label"]]
 
     model_list = [
-        ("ViT-L-14", "openai")  ##
-        # ('ViT-SO400M-14-SigLIP', 'webli'),
-        # ('ViT-SO400M-14-SigLIP-384', 'webli'),
-        # ('ViT-H-14-quickgelu', 'dfn5b'),
-        # ('ViT-H-14-378-quickgelu', 'dfn5b'),
+        ("ViT-L-14", "openai")("ViT-SO400M-14-SigLIP", "webli"),  ##
+        ("ViT-SO400M-14-SigLIP-384", "webli"),
+        ("ViT-H-14-quickgelu", "dfn5b"),
+        ("ViT-H-14-378-quickgelu", "dfn5b"),
     ]
 
     models_dict, transforms_dict = initialize_models(
