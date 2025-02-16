@@ -103,9 +103,6 @@ def parse_arguments():
         default="out.csv",
         help="Path for output logits during inference",
     )
-    parser.add_argument(
-        "--local-rank", type=int, default=0, help="local rank for distributed training"
-    )
     return parser.parse_args()
 
 
@@ -151,9 +148,9 @@ def train(
         # Initialize Linear SVM (instead of scikit-learn)
         # Custom logic for only models listed in model_list. Change to add more models
         if modelname.startswith("ViT-SO400M"):
-            svm = LinearSVM(in_features=1152)
+            svm = LinearSVM(in_features=1152).to(device)
         elif modelname.startswith("ViT-H"):
-            svm = LinearSVM(in_features=1280)
+            svm = LinearSVM(in_features=1280).to(device)
         else:
             print("Model Not Supported")
 
@@ -166,9 +163,7 @@ def train(
         checkpoint_base_path = ckp_output / f"joint_model_{modelname}_adv15000"
         # Jointly train CLIP and SVM
 
-        model = models_dict[modelname]
-        model.to(device)
-        svm.to(device)
+        model = models_dict[modelname].to(device)
         checkpoint = torch.load(
             output_dir
             / "ViT-H-14-quickgelu_dfn5b_imagenet_l2_imagenet_FARE4_ZlXOM/checkpoints/step_15000.pt"
@@ -247,26 +242,30 @@ def infer(
     output_dir,
     post_process,
     next_to_last,
-    is_train,
     inner_loss,
     csv_path,
     attack=None,
     iterations_adv=10,
 ):
-    print(os.listdir(VOL_PATH / "data"))
     data_dir = VOL_PATH / data_dir
     data_df = prepare_data(data_dir)
     data_df["label"] = np.where(data_df["type"] == "real", -1, 1)
     img_path_table = data_df[["path", "label"]]
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
     models_dict, transforms_dict = initialize_models(
         model_list, post_process, next_to_last
     )
     for modelname in models_dict.keys():
         model = models_dict[modelname].to(device)
-        svm = LinearSVM(in_features=1280).to(device)
-        checkpoint_name = f"joint_model_{modelname}_epoch3.pth"
+        # Initialize Linear SVM (instead of scikit-learn)
+        # Custom logic for only models listed in model_list. Change to add more models
+        if modelname.startswith("ViT-SO400M"):
+            svm = LinearSVM(in_features=1152).to(device)
+        elif modelname.startswith("ViT-H"):
+            svm = LinearSVM(in_features=1280).to(device)
+        else:
+            print("Model Not Supported")
+        checkpoint_name = f"joint_model_{modelname}_adv15000_epoch4.pth"
         checkpoint = torch.load(
             os.path.join(output_dir, checkpoint_name), map_location=device
         )
@@ -361,7 +360,12 @@ def validate_checkpoints(
             img_path_table, transforms_dict, modelname, data_dir
         )
         valdataloader = DataLoader(valdataset, batch_size=batch_size, shuffle=False)
-        svm = LinearSVM(in_features=1280).to(device)
+        if modelname.startswith("ViT-SO400M"):
+            svm = LinearSVM(in_features=1152).to(device)
+        elif modelname.startswith("ViT-H"):
+            svm = LinearSVM(in_features=1280).to(device)
+        else:
+            print("Model Not Supported")
         for epoch in range(epochs):
             checkpoint_name = f"joint_model_{modelname}_adv15000_epoch{epoch+1}.pth"
             checkpoint = torch.load(
@@ -420,7 +424,6 @@ def main():
                     args.weight_dir,
                     args.postprocess,
                     args.next_to_last,
-                    args.train,
                     args.inner_loss,
                     args.csv_path,
                     args.attack,

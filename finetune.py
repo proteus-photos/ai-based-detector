@@ -11,8 +11,15 @@ import numpy as np
 from utils.processing import set_random_seed, prepare_data
 from torch.utils.data import DataLoader
 from pathlib import Path
-from utils.helper import TrainValDataset, LinearSVM, initialize_models, InferDataset
+from utils.helper import (
+    TrainValDataset,
+    LinearSVM,
+    initialize_models,
+    InferDataset,
+    FullModel,
+)
 from adversarial.attacks import apgd_train as apgd
+from utils.losses import ce, hinge_loss
 
 
 def parse_arguments():
@@ -58,6 +65,18 @@ def parse_arguments():
         default=None,
         help="Used to evaluate on adversarial examples",
     )
+    parser.add_argument(
+        "--iterations_adv",
+        type=int,
+        default=10,
+        help="Iterations for adversarial attack",
+    )
+    parser.add_argument(
+        "--csv_path",
+        type=str,
+        default="out.csv",
+        help="Path for output logits during inference",
+    )
     return parser.parse_args()
 
 
@@ -88,9 +107,9 @@ def train(
         # Initialize Linear SVM (instead of scikit-learn)
         # Custom logic for only models listed in model_list. Change to add more models
         if modelname.startswith("ViT-SO400M"):
-            svm = LinearSVM(in_features=1152)
+            svm = LinearSVM(in_features=1152).to(device)
         elif modelname.startswith("ViT-H"):
-            svm = LinearSVM(in_features=1280)
+            svm = LinearSVM(in_features=1280).to(device)
         else:
             print("Model Not Supported")
 
@@ -101,9 +120,7 @@ def train(
 
         checkpoint_base_path = output_dir / f"joint_model_{modelname}_adv15000"
 
-        model = models_dict[modelname]
-        model.to(device)
-        svm.to(device)
+        model = models_dict[modelname].to(device)
         checkpoint = torch.load(
             output_dir
             / "ViT-H-14-quickgelu_dfn5b_imagenet_l2_imagenet_FARE4_ZlXOM/checkpoints/step_15000.pt"
@@ -168,31 +185,116 @@ def train(
         wandb.finish()
 
 
+def infer(
+    models_dict,
+    img_path_table,
+    transforms_dict,
+    data_dir,
+    batch_size,
+    output_dir,
+    inner_loss,
+    csv_path,
+    attack=None,
+    iterations_adv=10,
+):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    data_dir = Path(data_dir)
+    output_dir = Path(output_dir)
+    for modelname in models_dict.keys():
+        model = models_dict[modelname].to(device)
+        # Initialize Linear SVM (instead of scikit-learn)
+        # Custom logic for only models listed in model_list. Change to add more models
+        if modelname.startswith("ViT-SO400M"):
+            svm = LinearSVM(in_features=1152).to(device)
+        elif modelname.startswith("ViT-H"):
+            svm = LinearSVM(in_features=1280).to(device)
+        else:
+            print("Model Not Supported")
+        checkpoint_name = f"joint_model_{modelname}_epoch3.pth"
+        checkpoint = torch.load(
+            os.path.join(output_dir, checkpoint_name), map_location=device
+        )
+        model.load_state_dict(checkpoint["clip_model"])
+        svm.load_state_dict(checkpoint["svm_model"])
+        model.eval()
+        svm.eval()
+        all_image_features, all_ids = [], []
+        # batch, batch_id = [], []
+        last_index = img_path_table.index[-1]
+        dataset = InferDataset(img_path_table, data_dir, transforms_dict[modelname])
+        dataloader = DataLoader(dataset, batch_size=batch_size, pin_memory=True)
+
+        # Initialize storage
+        all_image_features, all_ids = [], []
+        full_model = FullModel(model.visual, svm).eval()
+        # Process batches
+
+        for batch, batch_id, targets in tqdm(dataloader, total=len(dataloader)):
+            batch = batch.to(device)
+            target_for_attack = targets.clone()
+            if inner_loss == "hinge":
+                loss_fn = hinge_loss
+            elif inner_loss == "ce":
+                target_for_attack = (target_for_attack + 1) // 2
+                loss_fn = ce
+            if attack == "apgd":
+                batch = apgd(
+                    model=full_model,
+                    loss_fn=loss_fn,
+                    x=batch,
+                    y=target_for_attack,
+                    norm="linf",
+                    eps=4,
+                    n_iter=iterations_adv,
+                    verbose=True,
+                )
+
+            with torch.no_grad(), torch.amp.autocast(device_type="cuda"):
+                features = model.visual.forward(batch)
+                outputs = svm(features).squeeze().cpu()
+                all_image_features.extend(outputs.flatten())
+                all_ids.extend(batch_id.tolist())
+
+        all_image_features = np.array(all_image_features)
+
+        modelname_column = f"joint_model_{modelname}_epoch3"
+        final_table = img_path_table[["path"]]
+        for ii, logit in zip(all_ids, all_image_features):
+            final_table.loc[ii, modelname_column] = logit
+        final_table.to_csv(csv_path, index=False)
+
+
 def validate_checkpoints(
     models_dict,
     img_path_table,
     transforms_dict,
     data_dir,
     batch_size,
-    device,
     checkpoint_dir,
     epochs=5,
 ):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    wandb.login(key=os.environ["WANDB_API_KEY"])
     for modelname in models_dict.keys():
         wandb.init(
-            project="clip-svm-validation-adv",
+            project="clip-svm-validation",
             config={
                 "batch_size": batch_size,
                 "epochs": epochs,
             },
-            name=modelname + "_15000",
+            name=modelname,
         )
-        model = models_dict[modelname]
+        model = models_dict[modelname].to(device)
         valdataset = TrainValDataset(
             img_path_table, transforms_dict, modelname, data_dir
         )
         valdataloader = DataLoader(valdataset, batch_size=batch_size, shuffle=False)
-        svm = LinearSVM(in_features=1280).to(device)
+        if modelname.startswith("ViT-SO400M"):
+            svm = LinearSVM(in_features=1152).to(device)
+        elif modelname.startswith("ViT-H"):
+            svm = LinearSVM(in_features=1280).to(device)
+        else:
+            print("Model Not Supported")
         for epoch in range(epochs):
             checkpoint_name = f"joint_model_{modelname}_adv15000_epoch{epoch+1}.pth"
             checkpoint = torch.load(
@@ -214,100 +316,6 @@ def validate_checkpoints(
                 total_loss += loss.item()
             wandb.log({"epoch_loss": total_loss})
         wandb.finish()
-
-
-def infer(
-    model_list,
-    img_path_table,
-    data_dir,
-    batch_size,
-    output_dir,
-    post_process,
-    next_to_last,
-    is_train,
-    inner_loss,
-    attack=None,
-):
-
-    def ce(out, targets, reduction="mean"):
-        # out = logits
-        assert out.shape[0] == targets.shape[0], (out.shape, targets.shape)
-        assert out.shape[0] > 1
-
-        return F.cross_entropy(out, targets, reduction=reduction)
-
-    def hinge_loss(outputs, labels):
-        return torch.mean(torch.clamp(1 - outputs * labels, min=0))
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    models_dict, transforms_dict = initialize_models(
-        model_list, post_process, next_to_last
-    )
-    for modelname in models_dict.keys():
-        model = models_dict[modelname].to(device)
-        svm = LinearSVM(in_features=1280).to(device)
-        checkpoint_name = f"joint_model_{modelname}_epoch3.pth"
-        checkpoint = torch.load(
-            os.path.join(output_dir, checkpoint_name), map_location=device
-        )
-        model.load_state_dict(checkpoint["clip_model"])
-        svm.load_state_dict(checkpoint["svm_model"])
-        model.eval()
-        svm.eval()
-        all_image_features, all_ids = [], []
-        # batch, batch_id = [], []
-        last_index = img_path_table.index[-1]
-        dataset = InferDataset(img_path_table, data_dir, transforms_dict[modelname])
-        dataloader = DataLoader(dataset, batch_size=batch_size, pin_memory=True)
-
-        # Initialize storage
-        all_image_features, all_ids = [], []
-
-        class FullModel(nn.Module):
-            def __init__(self, feature_extractor, classifier):
-                super().__init__()
-                self.feature_extractor = feature_extractor  # model.visual
-                self.classifier = classifier  # svm
-
-            def forward(self, x):
-                features = self.feature_extractor(x)  # Extract features
-                outputs = self.classifier(features).squeeze().cpu()  # Apply SVM
-                return outputs
-
-        full_model = FullModel(model.visual, svm).eval()
-        # Process batches
-
-        for batch, batch_id, targets in tqdm(dataloader, total=len(dataloader)):
-            batch = batch.to(device)
-            print("BATCH")
-            print(batch.shape)
-            print(targets.shape)
-            if attack == "apgd":
-                batch = apgd(
-                    model=full_model,
-                    loss_fn=hinge_loss,
-                    x=batch,
-                    y=targets,
-                    norm="linf",
-                    eps=4,
-                    n_iter=100,
-                    verbose=True,
-                )
-
-            with torch.no_grad(), torch.amp.autocast(device_type="cuda"):
-                features = model.visual.forward(batch)
-                outputs = svm(features).squeeze().cpu()
-                all_image_features.extend(outputs.flatten())
-                all_ids.extend(batch_id.tolist())
-            # batch, batch_id = [], []
-
-        all_image_features = np.array(all_image_features)
-
-        modelname_column = f"joint_model_{modelname}_epoch3"
-        final_table = img_path_table[["path"]]
-        for ii, logit in zip(all_ids, all_image_features):
-            final_table.loc[ii, modelname_column] = logit
-        final_table.to_csv("csvs_adv/nonrobust_hinge.csv", index=False)
 
 
 def main():
@@ -342,16 +350,16 @@ def main():
         )
     elif args.infer:
         infer(
-            filtered_list,
+            models_dict,
             img_path_table,
+            transforms_dict,
             args.data_dir,
             args.batch_size,
             args.weight_dir,
-            args.postprocess,
-            args.next_to_last,
-            args.train,
             args.inner_loss,
+            args.csv_path,
             args.attack,
+            args.iterations_adv,
         )
     elif args.val:
         validate_checkpoints(
@@ -360,7 +368,6 @@ def main():
             transforms_dict,
             args.data_dir,
             args.batch_size,
-            device,
             args.weight_dir,
             args.epochs,
         )
