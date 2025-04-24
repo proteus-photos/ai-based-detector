@@ -77,6 +77,11 @@ def parse_arguments():
         default="out.csv",
         help="Path for output logits during inference",
     )
+    parser.add_argument(
+        "--just_svm",
+        action="store_true",
+        help="If used, freeze backbone and just train svm",
+    )
     return parser.parse_args()
 
 
@@ -89,6 +94,7 @@ def train(
     output_dir,
     epochs=10,
     lr=1e-5,
+    just_svm=False,
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     data_dir = Path(data_dir)
@@ -127,15 +133,17 @@ def train(
         )
 
         # Uncooment to load checkpoint in the format saved in this file
-        # model.load_state_dict(checkpoint['clip_model'])
+        # if not just_svm:
+        #     model.load_state_dict(checkpoint['clip_model'])
         # svm.load_state_dict(checkpoint['svm_model'])
         # optimizer.load_state_dict(checkpoint['optimizer'])
 
         # Uncomment for loading visual backbone checkpoint from adversarial training
+        # for training svm for adversarially trained backbone
         checkpoint.pop("proj", None)
         model.visual.load_state_dict(checkpoint)
 
-        model.train()  # Set CLIP to train mode
+        model.eval() if just_svm else model.train()  # Set CLIP to train mode
         svm.train()  # Set SVM to train mode
         for epoch in range(epochs):
             total_loss = 0
@@ -146,7 +154,8 @@ def train(
                 optimizer.zero_grad()
 
                 # Forward pass through CLIP backbone
-                features = model.visual.forward(images)
+                with torch.no_grad() if just_svm else torch.enable_grad():
+                    features = model.visual.forward(images)
                 # Forward pass through SVM
                 outputs = svm(features).squeeze()
                 # Compute hinge loss
@@ -335,7 +344,7 @@ def main():
     ]
     filtered_list = [item for item in model_list if item[0] == args.modelname]
     models_dict, transforms_dict = initialize_models(
-        model_list, post_process, next_to_last
+        model_list, args.postprocess, args.next_to_last
     )
     if args.train:
         train(
@@ -347,6 +356,7 @@ def main():
             args.weight_dir,
             args.epochs,
             args.lr,
+            args.just_svm,
         )
     elif args.infer:
         infer(

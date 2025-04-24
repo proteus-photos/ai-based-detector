@@ -103,6 +103,13 @@ def parse_arguments():
         default="out.csv",
         help="Path for output logits during inference",
     )
+    parser.add_argument(
+        "--eps",
+        type=int,
+        default=4,
+        help="Eps",
+    )
+
     return parser.parse_args()
 
 
@@ -138,7 +145,7 @@ def train(
         wandb.init(
             project="clip-svm-finetuning-modal-adv",
             config={"batch_size": batch_size, "epochs": epochs, "learning_rate": lr},
-            name=modelname + "_15000",
+            name=modelname + "_20000",
         )
         traindataset = TrainValDataset(
             img_path_table, transforms_dict, modelname, data_dir
@@ -160,13 +167,13 @@ def train(
         )
         ckp_output = output_dir / "full_model"
         ckp_output.mkdir(exist_ok=True)
-        checkpoint_base_path = ckp_output / f"joint_model_{modelname}_adv15000"
+        checkpoint_base_path = ckp_output / f"joint_model_{modelname}_adv20000"
         # Jointly train CLIP and SVM
 
         model = models_dict[modelname].to(device)
         checkpoint = torch.load(
             output_dir
-            / "ViT-H-14-quickgelu_dfn5b_imagenet_l2_imagenet_FARE4_ZlXOM/checkpoints/step_15000.pt"
+            / "ViT-H-14-quickgelu_dfn5b_imagenet_l2_imagenet_FARE4_ZlXOM/ViT-H-14-quickgelu_dfn5b_imagenet_l2_imagenet_FARE4_ZlXOM/checkpoints/step_20000.pt"
         )
 
         # Uncooment to load checkpoint in the format saved in this file
@@ -246,6 +253,7 @@ def infer(
     csv_path,
     attack=None,
     iterations_adv=10,
+    eps=4,
 ):
     data_dir = VOL_PATH / data_dir
     data_df = prepare_data(data_dir)
@@ -265,12 +273,50 @@ def infer(
             svm = LinearSVM(in_features=1280).to(device)
         else:
             print("Model Not Supported")
-        checkpoint_name = f"joint_model_{modelname}_adv15000_epoch4.pth"
+        checkpoint_name = f"joint_model_{modelname}_epoch3.pth"
         checkpoint = torch.load(
             os.path.join(output_dir, checkpoint_name), map_location=device
         )
         model.load_state_dict(checkpoint["clip_model"])
         svm.load_state_dict(checkpoint["svm_model"])
+
+        # # -------------------------------------------------------------------------------------------------------------------------
+        # # just for interpolation
+        # alpha = 0.5
+        # # Load first checkpoint
+        # checkpoint_name1 = f"weights/joint_model_{modelname}_epoch3.pth"
+        # checkpoint1 = torch.load(
+        #     os.path.join(output_dir, checkpoint_name1), map_location=device
+        # )
+
+        # # Load second checkpoint
+        # checkpoint_name2 = (
+        #     f"output_adv/full_model/joint_model_{modelname}_adv15000_epoch4.pth"
+        # )
+        # checkpoint2 = torch.load(
+        #     os.path.join(output_dir, checkpoint_name2), map_location=device
+        # )
+
+        # # Interpolate model weights
+        # interpolated_clip_state_dict = {
+        #     key: (1 - alpha) * checkpoint1["clip_model"][key]
+        #     + alpha * checkpoint2["clip_model"][key]
+        #     for key in checkpoint1["clip_model"]
+        # }
+
+        # # Interpolate SVM weights (if applicable)
+        # interpolated_svm_state_dict = {
+        #     key: (1 - alpha) * checkpoint1["svm_model"][key]
+        #     + alpha * checkpoint2["svm_model"][key]
+        #     for key in checkpoint1["svm_model"]
+        # }
+
+        # # Load interpolated weights into the model
+        # model.load_state_dict(interpolated_clip_state_dict)
+        # svm.load_state_dict(interpolated_svm_state_dict)
+        # # ---end---
+        # # ---end-------------------------------------------------------------------------------------------------------------------------------------
+
         model.eval()
         svm.eval()
         all_image_features, all_ids = [], []
@@ -299,7 +345,7 @@ def infer(
                     x=batch,
                     y=target_for_attack,
                     norm="linf",
-                    eps=4,
+                    eps=eps,
                     n_iter=iterations_adv,
                     verbose=True,
                 )
@@ -312,7 +358,7 @@ def infer(
 
         all_image_features = np.array(all_image_features)
 
-        modelname_column = f"joint_model_{modelname}_adv15000_epoch4"
+        modelname_column = f"joint_model_{modelname}_epoch3"
         final_table = img_path_table[["path"]]
         for ii, logit in zip(all_ids, all_image_features):
             final_table.loc[ii, modelname_column] = logit
@@ -353,7 +399,7 @@ def validate_checkpoints(
                 "batch_size": batch_size,
                 "epochs": epochs,
             },
-            name=modelname + "_15000",
+            name=modelname + "_20000",
         )
         model = models_dict[modelname].to(device)
         valdataset = TrainValDataset(
@@ -367,7 +413,7 @@ def validate_checkpoints(
         else:
             print("Model Not Supported")
         for epoch in range(epochs):
-            checkpoint_name = f"joint_model_{modelname}_adv15000_epoch{epoch+1}.pth"
+            checkpoint_name = f"joint_model_{modelname}_adv20000_epoch{epoch+1}.pth"
             checkpoint = torch.load(
                 os.path.join(checkpoint_dir, checkpoint_name), map_location=device
             )
@@ -416,7 +462,7 @@ def main():
 
     elif args.infer:
         with modal.enable_output():
-            with app.run(detach=True):
+            with app.run(detach=False):
                 infer.remote(
                     filtered_list,
                     args.data_dir,
@@ -428,6 +474,7 @@ def main():
                     args.csv_path,
                     args.attack,
                     args.iterations_adv,
+                    args.eps,
                 )
 
     elif args.val:
